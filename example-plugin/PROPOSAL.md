@@ -190,8 +190,14 @@ ground truth rather than config inspection:
 3. Web UI page + SSE queue.
 4. Policy store, the four tools, execve runner, seed policies.
 5. Reviewer call + SSE summary streaming + cache.
-6. Audit Parts E–G; update README (launch line is unchanged — the broker just listens
-   on one more localhost port).
+6. Audit Parts E–G; update README. The broker just listens on one more localhost port
+   (8790) for the UI. Separately, the launch line **drops** `--strict-mcp-config
+   --mcp-config .mcp.json`: that flag makes MCP an allowlist but also strips
+   *plugin-provided* MCP servers, and fakechat delivers its tools as one — so strict mode
+   kills the chat surface. The plugin example falls back to the `permissions.deny`
+   denylist for the claude.ai servers (weaker; documented as such). The allowlist posture
+   stays in the SDK-driver `../example`, which controls MCP in code without a plugin
+   channel.
 
 Estimated size: the broker grows from ~100 lines to roughly 600–800 across
 `broker.mjs` (MCP + channel), `server.mjs` (HTTP/UI), `policies.mjs`, `reviewer.mjs`,

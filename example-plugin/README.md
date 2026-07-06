@@ -28,21 +28,30 @@ it keeps running):
 ```bash
 cd example-plugin
 claude \
-  --strict-mcp-config --mcp-config .mcp.json \
   --channels plugin:fakechat@claude-plugins-official \
   --dangerously-load-development-channels server:broker
 ```
 
-- `--strict-mcp-config --mcp-config .mcp.json` — load **only** the broker MCP server and
-  ignore every other configured server (claude.ai Gmail/Drive/Calendar, anything in user
-  config). This makes the MCP posture an *allowlist* — the one server we vetted — instead
-  of relying on the `permissions.deny` list to name every dangerous server; those denies
-  stay as a backstop. Without this flag, a newly-connected MCP server (network + private
-  data, running unsandboxed) would be exposed by default.
-- `--channels plugin:fakechat@...` — the chat surface (allowlisted plugin; loaded via the
-  channel/plugin mechanism, not MCP config, so `--strict-mcp-config` leaves it intact).
-- `--dangerously-load-development-channels server:broker` — our custom broker channel
-  (custom channels need this flag during the research preview).
+- `--channels plugin:fakechat@...` — the chat surface. fakechat is a **plugin channel**:
+  it ships its own MCP server (`bun … start`, tools `reply`/`edit_message`) that both
+  serves the web UI on `localhost:8787` and delivers the reply tool.
+- `--dangerously-load-development-channels server:broker` — promotes the broker MCP server
+  to a channel so it can push notifications (custom channels need this flag during the
+  research preview). The broker itself loads from the project `.mcp.json` automatically
+  (`enableAllProjectMcpServers` + the one-time trust in `settings.local.json`).
+
+> **Why not `--strict-mcp-config --mcp-config .mcp.json`?** An earlier version of this doc
+> launched with those flags to make MCP an *allowlist* (only the vetted broker server
+> loads). That is **incompatible with the fakechat plugin channel**: `--strict-mcp-config`
+> ignores *all* MCP config except the named file — **including plugin-provided servers** —
+> so it strips fakechat's own MCP server, and the chat surface (and its 8787 UI) never
+> starts. Because fakechat delivers its tools *as* a plugin MCP server, you cannot both
+> strict-allowlist MCP and run it. So this example uses the **denylist** instead: the
+> `mcp__claude_ai_*` entries in `permissions.deny` (see below). That is genuinely weaker —
+> you must name each dangerous server, and a server you connect *later* isn't denied by
+> default — so check `/mcp` for anything unexpected, and deny it. If you don't need a
+> plugin chat surface (e.g. the SDK-driver `../example`, where MCP is controlled in code),
+> the strict-allowlist posture is still the stronger choice.
 
 Then open the **approval UI**. The broker prints its tokened URL to
 `~/.clawmini-demo/broker.log` at startup, or build it yourself:
@@ -162,12 +171,18 @@ variant has no `canUseTool` backstop, containment rests entirely on the settings
   workspace symlink or `..` can't disguise a protected target), and denies — the settings
   equivalent of the driver's `canUseTool`. Its behavioral denial is exercised by the audit's
   Part D.
-- **MCP is loaded as an allowlist, not a denylist.** The documented launch uses
-  `--strict-mcp-config --mcp-config .mcp.json`, so *only* the broker server loads and every
-  other configured MCP server (claude.ai Gmail/Calendar/Drive, user-config servers) is
-  ignored regardless of what's connected — MCP servers run outside the sandbox, so each is a
-  network + private-data path. The explicit `mcp__claude_ai_*` entries in `permissions.deny`
-  remain as a backstop for anyone who drops the strict flag. Check what's live with `/mcp`.
+- **Non-broker MCP is denied by a denylist** (`mcp__claude_ai_Gmail/Calendar/Drive` in
+  `permissions.deny`). MCP servers run outside the sandbox, so each connected one is a
+  network + private-data path. The stronger posture is an *allowlist* — `--strict-mcp-config
+  --mcp-config .mcp.json`, loading only the vetted broker — but that flag also strips
+  **plugin-provided** MCP servers, and fakechat *is* one (it delivers its tools as a plugin
+  MCP server), so strict mode disables the chat surface. This example therefore uses the
+  denylist, which is weaker: you must name each dangerous server, and one connected *later*
+  isn't denied by default. **Check `/mcp` for anything unexpected and deny it.** The
+  SDK-driver `../example` keeps the allowlist posture (it controls MCP in code, no plugin
+  channel). Note fakechat itself won't appear in `/mcp` — channels are listed separately
+  (confirmed by the startup `Channels:` line), and its tools are pre-allowed as
+  `mcp__plugin_fakechat_fakechat` in `settings.json`.
 - **Hash pinning** makes registration review meaningful: policy bytes live only in the
   private store; a workspace copy the agent edits after approval is irrelevant, and an
   *update* re-enters review with an old→new diff (behaviorally proven by audit Part F).
