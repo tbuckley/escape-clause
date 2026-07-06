@@ -34,13 +34,22 @@ false`, and `denyRead` for crown-jewel paths.
 
 ## What this audit already caught
 
-Building this suite found a real hole in the first drafts of the examples: with the
-default `allowUnsandboxedCommands` (true), the probe agent set `dangerouslyDisableSandbox:
-true` and **fetched the full example.com page** — the network sandbox was defeated by the
-agent itself. Adding `allowUnsandboxedCommands: false` + `excludedCommands: []` closes it,
-and the audit now verifies the bypass has no effect. (It also caught a false *negative* in
-the detector — it had keyed on a page phrase that example.com later changed — a reminder to
-ground-truth on stable markers.)
+Building and extending this suite found three real holes in the examples:
+
+1. **Escape hatch open.** With the default `allowUnsandboxedCommands` (true), the probe set
+   `dangerouslyDisableSandbox: true` and fetched the full example.com page — the network
+   sandbox was defeated by the agent itself. Fixed with `allowUnsandboxedCommands: false`.
+2. **Native file tools bypass `sandbox.filesystem.denyRead`.** That setting only covers bash;
+   the Read/Edit/Write tools read protected paths freely. Fixed with `canUseTool` denials
+   (driver) and `Read()/Edit()/Write()` deny rules (plugin). The audit now probes BOTH the
+   bash and Read-tool paths.
+3. **MCP tools run outside the sandbox.** Connected servers like `mcp__claude_ai_Gmail/Drive/
+   Calendar` are network + private-data paths. Fixed with a broker/fakechat MCP allowlist
+   (driver) and explicit denies (plugin).
+
+It also caught bugs in *itself*: a false negative (keyed on a page phrase example.com later
+changed) and a false positive (bare `allowedTools` entries shadow `canUseTool`, so the Read
+probe wasn't actually gated). Both are reminders to ground-truth on stable, real behavior.
 
 ## Notes
 

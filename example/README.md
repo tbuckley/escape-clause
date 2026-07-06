@@ -115,5 +115,13 @@ reviewer LLM, cooldowns, audit log, and a real approval UI (tailnet + passkey). 
 example is just the request → async approve/reject → notify loop.
 
 The sandbox itself *is* hardened: network denied, escape hatch closed
-(`allowUnsandboxedCommands: false`), and `denyRead` on crown-jewel paths. Verify it with
-`../tests/sandbox-audit.mjs`.
+(`allowUnsandboxedCommands: false`), and `denyRead` on crown-jewel paths. Two things the
+bash sandbox does *not* cover, handled here in `canUseTool`:
+- **Native file tools bypass the bash sandbox.** `sandbox.filesystem.denyRead` only blocks
+  bash; the Read/Edit/Write tools run in the main process. `canUseTool` denies those tools
+  on the same protected paths.
+- **MCP servers run outside the sandbox.** Any connected server (e.g. `mcp__claude_ai_Gmail/
+  Drive/Calendar`) is a network + private-data path. `canUseTool` allows *only* the broker
+  and fakechat MCP tools and denies the rest.
+
+Verify all of it with `../tests/sandbox-audit.mjs`.

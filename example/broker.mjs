@@ -23,6 +23,12 @@ const DIR = join(homedir(), '.clawmini-demo')
 const PENDING = join(DIR, 'pending')
 const VERDICTS = join(DIR, 'verdicts')
 const COUNTER = join(DIR, 'counter')
+
+// Paths the native file tools (Read/Edit/Write) must not touch. sandbox.filesystem.denyRead
+// only covers bash; these tools run in the main process and bypass it, so canUseTool
+// enforces the same paths below.
+const PROTECTED = ['.ssh', '.aws', '.gnupg', '.config/gcloud', '.clawmini-demo'].map((p) => join(homedir(), p))
+const isProtected = (fp) => { if (!fp) return false; const abs = fp.startsWith('~') ? join(homedir(), fp.slice(1)) : fp; return PROTECTED.some((p) => abs === p || abs.startsWith(p + '/')) }
 for (const d of [PENDING, VERDICTS]) mkdirSync(d, { recursive: true })
 const now = () => new Date().toISOString().slice(11, 19)
 const log = (m) => process.stderr.write(`[broker ${now()}] ${m}\n`)
@@ -110,6 +116,15 @@ for await (const m of query({
     },
     canUseTool: async (toolName, input) => {
       if (toolName === 'SandboxNetworkAccess') { log(`DENY SandboxNetworkAccess host=${input?.host}`); return { behavior: 'deny', message: 'Outside-VM denied. Use broker request_action.' } }
+      // native file tools bypass the bash sandbox — enforce protected paths here too
+      if (['Read', 'Edit', 'Write', 'NotebookEdit'].includes(toolName) && isProtected(String(input?.file_path || input?.notebook_path || ''))) {
+        log(`DENY ${toolName} on protected path`); return { behavior: 'deny', message: 'Protected path — not accessible to file tools.' }
+      }
+      // MCP servers run OUTSIDE the sandbox. Allow only the broker (+ fakechat chat); deny any
+      // other MCP tool (e.g. mcp__claude_ai_Gmail/Drive/Calendar — network + private data).
+      if (toolName.startsWith('mcp__') && !/__broker__|fakechat/i.test(toolName)) {
+        log(`DENY MCP tool ${toolName} (only broker/fakechat allowed)`); return { behavior: 'deny', message: 'This MCP tool is disabled.' }
+      }
       return { behavior: 'allow', updatedInput: input }
     },
   },

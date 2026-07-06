@@ -3,7 +3,13 @@
   "permissions": {
     "defaultMode": "default",
     "allow": ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "mcp__broker__request_action"],
-    "deny": ["WebFetch", "WebSearch"]
+    "deny": [
+      "WebFetch", "WebSearch",
+      "Read(~/.ssh/**)", "Read(~/.aws/**)", "Read(~/.gnupg/**)", "Read(~/.config/gcloud/**)",
+      "Edit(~/.ssh/**)", "Write(~/.ssh/**)",
+      "Read(~/.clawmini-demo/**)", "Edit(~/.clawmini-demo/**)", "Write(~/.clawmini-demo/**)",
+      "mcp__claude_ai_Gmail", "mcp__claude_ai_Google_Calendar", "mcp__claude_ai_Google_Drive"
+    ]
   },
   "sandbox": {
     "enabled": true,

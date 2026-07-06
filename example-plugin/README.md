@@ -94,7 +94,15 @@ Policy engine, payload snapshotting/CAS, reviewer LLM, cooldowns, audit log, rea
 UI. This is just the request → async approve/reject → notify loop as a plugin.
 
 The sandbox is hardened (network denied, escape hatch closed via
-`allowUnsandboxedCommands: false`, `denyRead` on crown-jewel paths) — verify with
-`../tests/sandbox-audit.mjs`. Note the plugin variant has no `canUseTool` backstop, so the
-sandbox settings are doing the real containment work; keeping them sound (which the audit
-checks) matters more here than in the driver variant.
+`allowUnsandboxedCommands: false`, `denyRead` on crown-jewel paths). Because the plugin
+variant has no `canUseTool` backstop, containment rests entirely on the settings, so two
+extra layers are in `permissions.deny`:
+- **`Read()/Edit()/Write()` deny rules** for crown-jewel paths and `~/.clawmini-demo` — the
+  native file tools bypass `sandbox.filesystem.denyRead` (which only covers bash), so they
+  need permission rules too. (Deny beats allow, so these win over the broad `allow` list.)
+- **`mcp__claude_ai_Gmail/Google_Calendar/Google_Drive`** denied — MCP servers run outside
+  the sandbox, so any connected integration is a network + private-data path. If you've
+  connected other MCP servers, deny those too, or launch with `--strict-mcp-config` so only
+  the broker is loaded. Check what's live with `/mcp` inside the session.
+
+Verify all of it with `../tests/sandbox-audit.mjs`.
