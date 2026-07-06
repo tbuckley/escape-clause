@@ -1,8 +1,9 @@
 # dependencies
 node_modules/
 
-# generated / runtime
-.claude/
+# generated / runtime — ignore claude session state but keep committed project settings
+.claude/*
+!.claude/settings.json
 *.log
 *.pid
 out.log

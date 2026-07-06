@@ -34,6 +34,12 @@ claude \
 - `--dangerously-load-development-channels server:broker` — our custom broker channel
   (custom channels need this flag during the research preview).
 
+The sandbox config lives at **`.claude/settings.json`** so it auto-loads when you run
+`claude` from this directory — no `--settings` flag needed. (A plain `settings.json` in the
+project root is *not* auto-loaded, which would silently run with no sandbox at all. The
+audit's Part C verifies the sandbox actually engages on launch.) You can confirm it's live
+by asking the agent to run `env | grep srt` — the `srt:` proxy only appears when sandboxed.
+
 On first launch claude asks you to trust the workspace and the new MCP server — accept
 both. A startup line confirms the channel: `Channels: server:broker`. (Prereq: install
 fakechat once with `/plugin install fakechat@claude-plugins-official` inside claude.)
@@ -69,7 +75,7 @@ you (fakechat UI) ──▶ agent (interactive claude, sandboxed: no network/hos
 - `broker.mjs` — MCP server with `claude/channel` capability. Single stdio process, so the
   tool handler and verdict watcher share memory directly (no filesystem hand-off — that
   complication only exists in the SDK in-process variant).
-- `.mcp.json` / `settings.json` — register + pre-trust the broker; sandbox on with network
+- `.mcp.json` / `.claude/settings.json` — register + pre-trust the broker; sandbox on with network
   denied, so the agent *must* use the broker to leave the box.
 - `guard.mjs` — `PreToolUse` hook: one global choke point denying file tools on protected paths.
 - `CLAUDE.md` — tells the agent the rules of the box.

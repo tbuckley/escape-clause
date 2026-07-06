@@ -15,6 +15,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'no
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { spawnSync } from 'node:child_process'
 
 const VERBOSE = process.argv.includes('--verbose')
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -112,9 +113,13 @@ function configChecks() {
     pass: /enabled:\s*true/.test(drv) && /allowedDomains:\s*\[\s*\]/.test(drv),
     detail: drv ? 'broker.mjs uses enabled:true, allowedDomains:[]' : 'broker.mjs not found' })
 
-  // example-plugin/ (settings.json): parse it
+  // example-plugin/ project settings MUST live at .claude/settings.json — a plain
+  // settings.json in the project root is NOT auto-loaded, so the sandbox never engages.
   let sp = null
-  try { sp = JSON.parse(readFileSync(join(ROOT, 'example-plugin/settings.json'), 'utf8')) } catch {}
+  try { sp = JSON.parse(readFileSync(join(ROOT, 'example-plugin/.claude/settings.json'), 'utf8')) } catch {}
+  out.push({ name: 'example-plugin/ config is at the auto-loaded .claude/settings.json path', sev: 'critical',
+    pass: existsSync(join(ROOT, 'example-plugin/.claude/settings.json')) && !existsSync(join(ROOT, 'example-plugin/settings.json')),
+    detail: existsSync(join(ROOT, 'example-plugin/settings.json')) ? 'settings.json in project ROOT is NOT auto-loaded — move to .claude/' : '.claude/settings.json (auto-loads)' })
   const s = sp?.sandbox
   out.push({ name: 'example-plugin/ sandbox enabled + no allowed domains', sev: 'critical',
     pass: !!s && s.enabled === true && Array.isArray(s.network?.allowedDomains) && s.network.allowedDomains.length === 0,
@@ -155,6 +160,26 @@ function configChecks() {
   return out
 }
 
+// ---------- Part C: does the plugin LAUNCH actually load the sandbox? ----------
+// The config being sound is worthless if the launch doesn't load it. Run claude -p from
+// example-plugin WITHOUT --settings (as the interactive launch does) and confirm the
+// sandbox engages (the srt proxy appears only when the sandbox is active).
+function pluginLaunchCheck() {
+  const dir = join(ROOT, 'example-plugin')
+  const probe = join(dir, 'launch_probe.txt')
+  rmSync(probe, { force: true })
+  try {
+    spawnSync('claude', ['-p', 'Run this bash command exactly and do not use any other tool: (env | grep -q "srt:" && echo SANDBOXED || echo NO_SANDBOX) > ./launch_probe.txt ; echo done'],
+      { cwd: dir, input: '', timeout: 120000, encoding: 'utf8', stdio: ['pipe', 'ignore', 'ignore'] })
+  } catch {}
+  let content = ''; try { content = readFileSync(probe, 'utf8') } catch {}
+  rmSync(probe, { force: true })
+  if (!content) return [{ name: 'example-plugin/ launch loads the sandbox (auto-load probe)', sev: 'hardening', pass: false, detail: 'could not run claude -p to verify (skipped)' }]
+  const active = /SANDBOXED/.test(content)
+  return [{ name: 'example-plugin/ launch loads the sandbox (auto-load probe)', sev: 'critical', pass: active,
+    detail: active ? 'sandbox active when launched from the dir (no --settings)' : 'NO sandbox — config present but NOT loaded by the launch!' }]
+}
+
 // ---------- run ----------
 function report(title, checks) {
   console.log(`\n=== ${title} ===`)
@@ -170,5 +195,6 @@ function report(title, checks) {
 let fails = 0
 fails += report('A. behavioral sandbox audit (shared config)', await behaviorAudit())
 fails += report('B. config drift — both examples use the sound config', configChecks())
+fails += report('C. plugin launch actually loads the sandbox', pluginLaunchCheck())
 console.log(`\n${fails === 0 ? 'SANDBOX SOUND ✓ — all critical checks passed (WARN = documented hardening gaps)' : `SANDBOX UNSOUND ✗ — ${fails} critical failure(s)`}`)
 process.exit(fails === 0 ? 0 : 1)

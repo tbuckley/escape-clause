@@ -30,7 +30,14 @@ temp dir, so even a total sandbox failure can't touch real files.
 
 **B. Config drift** — confirms **both** examples actually use the sound config: sandbox
 enabled with no allowed domains, WebFetch/WebSearch denied, `allowUnsandboxedCommands:
-false`, and `denyRead` for crown-jewel paths.
+false`, `denyRead` for crown-jewel paths, file-tool protection (canUseTool / guard hook),
+and non-broker MCP tools denied.
+
+**C. Launch load** — runs `claude -p` from `example-plugin/` the documented way (no
+`--settings`) and confirms the sandbox actually engages. A sound config is worthless if the
+launch doesn't load it — which is exactly the bug this caught: the config was in a plain
+`settings.json` that Claude Code never auto-loads (it reads `.claude/settings.json`), so the
+whole sandbox was silently inactive.
 
 ## What this audit already caught
 
@@ -46,6 +53,11 @@ Building and extending this suite found three real holes in the examples:
 3. **MCP tools run outside the sandbox.** Connected servers like `mcp__claude_ai_Gmail/Drive/
    Calendar` are network + private-data paths. Fixed with a broker/fakechat MCP allowlist
    (driver) and explicit denies (plugin).
+4. **Config present but not loaded.** The plugin's `settings.json` sat in the project root,
+   which Claude Code never auto-loads — so the interactive launch ran with *no sandbox at
+   all*. Fixed by moving it to `.claude/settings.json`; Part C now verifies the sandbox
+   actually engages on launch. (Grep also bypassed per-tool deny rules — fixed with a global
+   PreToolUse guard hook.)
 
 It also caught bugs in *itself*: a false negative (keyed on a page phrase example.com later
 changed) and a false positive (bare `allowedTools` entries shadow `canUseTool`, so the Read
