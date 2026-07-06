@@ -2,7 +2,7 @@
   "enableAllProjectMcpServers": true,
   "permissions": {
     "defaultMode": "default",
-    "allow": ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "mcp__broker__request_action"],
+    "allow": ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "mcp__broker"],
     "deny": [
       "WebFetch", "WebSearch",
       "mcp__claude_ai_Gmail", "mcp__claude_ai_Google_Calendar", "mcp__claude_ai_Google_Drive"

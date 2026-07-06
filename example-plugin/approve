@@ -1,2 +1,0 @@
-#!/bin/sh
-touch "$HOME/.clawmini-demo/verdicts/$1.approve" && echo "approved $1"

@@ -1,35 +1,36 @@
 #!/usr/bin/env node
-// Minimal Clawmini broker — PURE PLUGIN version.
+// Clawmini broker — PURE PLUGIN version, with a real approval surface.
 //
-// Here claude runs NORMALLY (interactive, e.g. in tmux). The broker is just a plugin:
-// an MCP server that also implements the channel spec, so it can (a) expose a
-// request_action tool and (b) PUSH async approve/reject notifications into the session.
-// It is NOT the driver — it does the minimum to let the agent make requests and be
-// notified of the outcome.
+// claude runs NORMALLY (interactive, e.g. in tmux). The broker is one stdio process
+// playing three roles:
+//   - MCP server (+ channel spec, so it can PUSH async approve/reject outcomes into the
+//     session): tools request_action / list_policies / check_policy / register_policy
+//   - policy engine: named scripts pinned by hash in the private store; readonly and
+//     private-write classes auto-run, everything else files a ticket (policies.mjs)
+//   - approval web UI on http://127.0.0.1:8790 with AI risk summaries (server.mjs,
+//     reviewer.mjs) — the ONLY place tickets get resolved; MCP can't resolve by design
 //
-// Unlike the SDK-driver example, this is a single stdio process, so the tool handler and
-// the verdict watcher share memory directly (no filesystem hand-off needed).
-//
-// Human approval, no web UI:  ./approve REQ-1   or   ./deny REQ-1
+// State is durable JSON under ~/.clawmini-demo (store.mjs), which the sandbox + guard
+// hook deny to the agent. Tickets snapshot the exact argv/script at request time; the
+// approved bytes are what run.
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { execFile } from 'node:child_process'
-import { mkdirSync, appendFileSync, existsSync, rmSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { appendFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { DIR, audit, nextTicketId, saveTicket, getTicket } from './store.mjs'
+import { CLASSES, AUTO_CLASSES, NAME_RE, getPolicy, listPolicies, policyScript, installPolicy, runPolicy, seedPolicies } from './policies.mjs'
+import { review } from './reviewer.mjs'
+import { startServer } from './server.mjs'
 
-const DIR = join(homedir(), '.clawmini-demo')
-const VERDICTS = join(DIR, 'verdicts')
-const LOG = join(DIR, 'broker.log')
-mkdirSync(VERDICTS, { recursive: true })
-const log = (m) => { const s = `[${new Date().toISOString().slice(11, 19)}] ${m}\n`; appendFileSync(LOG, s); process.stderr.write(s) }
+const PORT = Number(process.env.CLAWMINI_UI_PORT || 8790)
+const log = (m) => { const s = `[${new Date().toISOString().slice(11, 19)}] ${m}\n`; appendFileSync(join(DIR, 'broker.log'), s); process.stderr.write(s) }
 
-const pending = new Map() // ticket -> command (argv)
-let n = 0
+seedPolicies()
 
 const mcp = new Server(
-  { name: 'broker', version: '0.0.1' },
+  { name: 'broker', version: '0.1.0' },
   {
     capabilities: {
       experimental: { 'claude/channel': {} }, // channel spec -> lets the broker PUSH notifications
@@ -37,43 +38,203 @@ const mcp = new Server(
     },
     instructions:
       'The broker lets you act OUTSIDE your sandbox (network/host), which is otherwise blocked. ' +
-      'Call request_action(command, reason) with an argv array; it returns a ticket immediately and does NOT block. ' +
+      'PREFER NAMED POLICIES over raw commands: list_policies() shows what exists; check_policy(policy, args) dry-runs the decision. ' +
+      'request_action({policy, args, reason}) runs auto-approved classes (readonly/private-write) immediately and returns output; ' +
+      'other classes and raw commands ({command: argv, reason}) return a ticket for human review — NON-BLOCKING. ' +
       'The outcome arrives later as a channel message: <channel source="broker" ticket="REQ-N" verdict="approved|rejected">. ' +
-      'On "approved" the command output is in that message — relay it to whoever asked. Never try to bypass the sandbox; use the broker.',
+      'On "approved" the output is in that message — relay it to whoever asked. ' +
+      'register_policy() proposes a new/updated policy script (itself human-reviewed). ' +
+      'A pending ticket is not a failure: continue other work; do not poll. Never try to bypass the sandbox; use the broker.',
   },
 )
 
-mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [{
+const TOOLS = [
+  {
     name: 'request_action',
-    description: 'Request a command OUTSIDE the sandbox (host/network). NON-BLOCKING: returns a ticket now; the ' +
-      'approve/reject outcome arrives later as a broker channel message. Pass command as an argv array (no shell).',
+    description: 'Act OUTSIDE the sandbox. Give EITHER {policy, args} to run a named policy (auto-approved classes ' +
+      'execute immediately and return output; others file a human-review ticket) OR {command} as a raw argv array ' +
+      '(always human-reviewed). NON-BLOCKING when a ticket is filed: the outcome arrives later as a broker channel message.',
     inputSchema: {
       type: 'object',
       properties: {
-        command: { type: 'array', items: { type: 'string' }, description: 'argv, e.g. ["echo","hello"]' },
-        reason: { type: 'string', description: 'why you need this, shown to the human' },
+        policy: { type: 'string', description: 'name of a registered policy (see list_policies)' },
+        args: { type: 'array', items: { type: 'string' }, description: 'args for the policy script' },
+        command: { type: 'array', items: { type: 'string' }, description: 'raw argv, e.g. ["echo","hello"] — always human-reviewed' },
+        reason: { type: 'string', description: 'why you need this, shown to the human reviewer' },
       },
-      required: ['command', 'reason'],
+      required: ['reason'],
     },
-  }],
-}))
+  },
+  {
+    name: 'list_policies',
+    description: 'List registered policies: name, description, class (readonly/private-write auto-run; public-write/destructive need human approval), script hash.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'check_policy',
+    description: 'Dry-run: would request_action({policy, args}) auto-run or need human approval? Use this to avoid filing spurious tickets.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        policy: { type: 'string' },
+        args: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['policy'],
+    },
+  },
+  {
+    name: 'register_policy',
+    description: 'Propose a new or updated named policy script. This is ITSELF an escalation: it files a human-review ticket ' +
+      'showing the full script (and a diff against any existing version). On approval the broker installs the script in its ' +
+      'private store, pinned by hash. Scripts are invoked as execve(script, args) — no shell wrapping of args.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'kebab-case name, e.g. git-fetch-origin' },
+        script: { type: 'string', description: 'full script content including shebang, e.g. "#!/bin/sh\\n..."' },
+        class: { type: 'string', enum: CLASSES, description: 'readonly|private-write auto-run once installed; public-write|destructive are reviewed per run' },
+        description: { type: 'string', description: 'what it does + expected args, shown in list_policies and to the reviewer' },
+      },
+      required: ['name', 'script', 'class', 'description'],
+    },
+  },
+]
+
+mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
+
+const json = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj) }] })
+const fail = (msg) => json({ error: msg })
 
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
-  if (req.params.name !== 'request_action') throw new Error(`unknown tool: ${req.params.name}`)
-  const { command, reason } = req.params.arguments
-  const ticket = `REQ-${++n}`
-  pending.set(ticket, command)
-  log(`PENDING ${ticket}: ${JSON.stringify(command)} — ${reason}`)
-  log(`   approve:  ./approve ${ticket}     reject:  ./deny ${ticket}`)
-  return { content: [{ type: 'text', text: JSON.stringify({ ticket, status: 'pending', note: 'You will be notified when a human decides. Continue other work.' }) }] }
+  const a = req.params.arguments || {}
+  switch (req.params.name) {
+    case 'list_policies':
+      return json(listPolicies())
+
+    case 'check_policy': {
+      const p = getPolicy(a.policy)
+      if (!p) return json({ policy: a.policy, decision: 'unknown_policy' })
+      return json({
+        policy: p.name, class: p.class,
+        decision: AUTO_CLASSES.has(p.class) ? 'auto_approve' : 'needs_approval',
+      })
+    }
+
+    case 'request_action': {
+      if (a.policy && a.command) return fail('give policy OR command, not both')
+      if (a.policy) {
+        const p = getPolicy(a.policy)
+        if (!p) return fail(`unknown policy: ${a.policy} (see list_policies)`)
+        const args = (a.args || []).map(String)
+        if (AUTO_CLASSES.has(p.class)) {
+          const r = await runPolicy(p.name, args)
+          audit('auto_approved_run', { policy: p.name, class: p.class, args, exitCode: r.exitCode })
+          log(`AUTO-RUN ${p.name} ${JSON.stringify(args)} -> exit=${r.exitCode}`)
+          return json({ status: 'executed', policy: p.name, class: p.class, exitCode: r.exitCode, ...capOutput(r, p.name) })
+        }
+        return json(createTicket({ kind: 'policy', policy: p.name, policyClass: p.class, args, reason: String(a.reason || '') }))
+      }
+      if (Array.isArray(a.command) && a.command.length && a.command.every((x) => typeof x === 'string')) {
+        return json(createTicket({ kind: 'command', command: a.command, reason: String(a.reason || '') }))
+      }
+      return fail('need {policy, args?} or {command: ["argv0", ...]}')
+    }
+
+    case 'register_policy': {
+      if (!NAME_RE.test(String(a.name))) return fail('name must be kebab-case: ' + NAME_RE)
+      if (!CLASSES.includes(a.class)) return fail(`class must be one of ${CLASSES.join('|')}`)
+      if (typeof a.script !== 'string' || !a.script.trim()) return fail('script must be non-empty')
+      const registration = {
+        name: a.name, class: a.class,
+        description: String(a.description || ''), script: a.script,
+      }
+      const previous = policyScript(a.name)
+      if (previous !== null) registration.previousScript = previous
+      return json(createTicket({ kind: 'policy-registration', registration, reason: String(a.reason || a.description || '') }))
+    }
+
+    default:
+      throw new Error(`unknown tool: ${req.params.name}`)
+  }
 })
+
+// ---------- tickets ----------
+function createTicket(fields) {
+  const t = { ticket: nextTicketId(), status: 'pending', created: new Date().toISOString(), ...fields }
+  saveTicket(t)
+  audit('ticket_created', { ticket: t.ticket, kind: t.kind })
+  log(`PENDING ${t.ticket} (${t.kind}) — review at http://127.0.0.1:${PORT}`)
+  ui.broadcast()
+  // AI risk summary, async: the ticket is already visible; the summary streams in when
+  // ready (or never, if no API key — the UI approves fine from raw facts alone).
+  review(t).then((summary) => {
+    if (!summary) return
+    const cur = getTicket(t.ticket)
+    if (!cur) return
+    cur.summary = summary
+    saveTicket(cur)
+    ui.broadcast()
+  }).catch(() => {})
+  return { ticket: t.ticket, status: 'pending', note: 'A human will review this in the web UI. You will be notified of the outcome as a channel message. Continue other work.' }
+}
+
+// The single resolution path, called only by the web UI's authenticated endpoints.
+async function resolveTicket(id, verdict, message) {
+  const t = getTicket(id)
+  if (!t) return { error: `unknown ticket: ${id}` }
+  if (t.status !== 'pending') return { error: `${id} already ${t.status}` }
+  t.status = verdict
+  t.resolved = new Date().toISOString()
+  if (message) t.note = message
+
+  if (verdict === 'rejected') {
+    saveTicket(t)
+    audit('rejected', { ticket: id, note: message })
+    log(`REJECTED ${id}${message ? ` — ${message}` : ''}`)
+    notify(id, 'rejected', `The human declined.${message ? ` Message from the human: ${message}` : ''} Do not retry the same request.`)
+    return { ok: true }
+  }
+
+  // Approved: execute exactly the snapshot in the ticket file.
+  let body
+  if (t.kind === 'command') {
+    const r = await runOnHost(t.command)
+    t.output = fmtRun(r)
+    body = `Output:\n${capOutput(r, id).output}`
+  } else if (t.kind === 'policy') {
+    const r = await runPolicy(t.policy, t.args || [])
+    t.output = fmtRun(r)
+    body = `Policy ${t.policy} ran. Output:\n${capOutput(r, id).output}`
+  } else if (t.kind === 'policy-registration') {
+    const m = installPolicy(t.registration)
+    t.output = `installed ${m.name} (class ${m.class}, sha256 ${m.sha256})`
+    body = `Policy '${m.name}' (class ${m.class}) is now registered — you can run it with request_action({policy: "${m.name}", args: [...]}).`
+  } else {
+    return { error: `unknown ticket kind: ${t.kind}` }
+  }
+  saveTicket(t)
+  audit('approved_executed', { ticket: id, kind: t.kind })
+  log(`APPROVED ${id} (${t.kind})`)
+  notify(id, 'approved', body)
+  return { ok: true }
+}
 
 const runOnHost = (argv) => new Promise((res) =>
   execFile(argv[0], argv.slice(1), { timeout: 15000 }, (e, out, err) =>
-    res({ exitCode: e?.code ?? 0, stdout: String(out), stderr: String(err || e?.message || '') })))
+    res({ exitCode: e ? (typeof e.code === 'number' ? e.code : 1) : 0, stdout: String(out), stderr: String(err || e?.message || '') })))
 
-// Push a channel event into the session — this is the async "notification".
+const fmtRun = (r) => `exit=${r.exitCode}\nstdout: ${r.stdout.trim() || '(none)'}${r.stderr.trim() ? `\nstderr: ${r.stderr.trim()}` : ''}`
+
+// Large outputs go to a workspace file, not the tool result / channel message.
+function capOutput(r, tag) {
+  const text = fmtRun(r)
+  if (text.length <= 8000) return { output: text }
+  const file = join(process.cwd(), `broker-output-${tag}-${Date.now()}.txt`)
+  writeFileSync(file, text)
+  return { output: `${text.slice(0, 500)}…\n(large output: full ${text.length} bytes written to ${file})` }
+}
+
+// Push a channel event into the session — the async "notification".
 function notify(ticket, verdict, body) {
   void mcp.notification({
     method: 'notifications/claude/channel',
@@ -82,20 +243,6 @@ function notify(ticket, verdict, body) {
   log(`NOTIFIED ${ticket}: ${verdict}`)
 }
 
-// Watch for human verdict files; resolve the pending request and push the outcome.
-setInterval(async () => {
-  for (const [ticket, command] of pending) {
-    const ok = join(VERDICTS, `${ticket}.approve`), no = join(VERDICTS, `${ticket}.deny`)
-    if (existsSync(ok)) {
-      rmSync(ok, { force: true }); pending.delete(ticket)
-      const r = await runOnHost(command)
-      notify(ticket, 'approved', `exit=${r.exitCode}, stdout: ${r.stdout.trim() || '(none)'}${r.stderr ? ' | stderr: ' + r.stderr.trim() : ''}`)
-    } else if (existsSync(no)) {
-      rmSync(no, { force: true }); pending.delete(ticket)
-      notify(ticket, 'rejected', 'The human declined. Do not retry the same request.')
-    }
-  }
-}, 400)
-
+const ui = startServer({ port: PORT, resolveTicket, log })
 await mcp.connect(new StdioServerTransport())
-log('broker channel up (stdio). watching verdicts in ' + VERDICTS)
+log(`broker up (stdio MCP + channel). store: ${DIR}`)
