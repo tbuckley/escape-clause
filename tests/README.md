@@ -33,11 +33,21 @@ enabled with no allowed domains, WebFetch/WebSearch denied, `allowUnsandboxedCom
 false`, `denyRead` for crown-jewel paths, file-tool protection (canUseTool / guard hook),
 and non-broker MCP tools denied.
 
-**C. Launch load** — runs `claude -p` from `example-plugin/` the documented way (no
-`--settings`) and confirms the sandbox actually engages. A sound config is worthless if the
-launch doesn't load it — which is exactly the bug this caught: the config was in a plain
-`settings.json` that Claude Code never auto-loads (it reads `.claude/settings.json`), so the
-whole sandbox was silently inactive.
+**C. Launch load + autonomy** — runs `claude -p` from `example-plugin/` the documented way
+(no `--settings`) and confirms two things: the sandbox actually engages, and sandboxed bash
+**auto-runs unattended**. A sound config is worthless if the launch doesn't load it — the bug
+this caught: the config was in a plain `settings.json` that Claude Code never auto-loads (it
+reads `.claude/settings.json`), so the whole sandbox was silently inactive. The autonomy
+check guards a subtler drift: the field is `autoAllowBashIfSandboxed` (the schema has no
+`autoApprove` — that value is silently ignored), and if it's wrong, headless bash gets no
+approval, writes nothing, and the probe fails.
+
+**D. Guard hook behavioral denial** — the plugin has no `canUseTool`; its only file-tool
+defense is `guard.mjs` (a `PreToolUse` hook), which Part B merely checks *exists*. Part D
+runs the plugin config for real and proves the hook actually **denies** — it plants a decoy
+secret in a protected path, symlinks it into the workspace, and asks the agent to Read the
+link. Ground truth is a marker the agent can only obtain by reading through the link; if it
+appears, the hook let a symlink past a literal-string check (it must `realpath` the target).
 
 ## What this audit already caught
 

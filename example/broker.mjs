@@ -15,9 +15,9 @@
 import { query, createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import { execFile } from 'node:child_process'
-import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync, readdirSync } from 'node:fs'
+import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve, dirname, basename } from 'node:path'
 
 const DIR = join(homedir(), '.clawmini-demo')
 const PENDING = join(DIR, 'pending')
@@ -26,9 +26,21 @@ const COUNTER = join(DIR, 'counter')
 
 // Paths the native file tools (Read/Edit/Write) must not touch. sandbox.filesystem.denyRead
 // only covers bash; these tools run in the main process and bypass it, so canUseTool
-// enforces the same paths below.
-const PROTECTED = ['.ssh', '.aws', '.gnupg', '.config/gcloud', '.clawmini-demo'].map((p) => join(homedir(), p))
-const isProtected = (fp) => { if (!fp) return false; const abs = fp.startsWith('~') ? join(homedir(), fp.slice(1)) : fp; return PROTECTED.some((p) => abs === p || abs.startsWith(p + '/')) }
+// enforces the same paths below. Resolve symlinks and `..` first (realpath) — a raw
+// file_path like `./link` -> ~/.ssh or workspace/../../.ssh disguises a protected target,
+// so a literal startsWith() is bypassable; compare REAL paths on both sides.
+const expand = (p) => (p && p.startsWith('~') ? join(homedir(), p.slice(1)) : p)
+function realish(p) {
+  const e = expand(p); if (!e) return e
+  const abs = resolve(e); const tail = []
+  for (let dir = abs; ; dir = dirname(dir)) {
+    try { return join(realpathSync(dir), ...tail.reverse()) } catch {}
+    const parent = dirname(dir); if (parent === dir) return abs
+    tail.push(basename(dir))
+  }
+}
+const PROTECTED = ['.ssh', '.aws', '.gnupg', '.config/gcloud', '.clawmini-demo'].map((p) => realish(join(homedir(), p)))
+const isProtected = (fp) => { const a = realish(fp); return !!a && PROTECTED.some((p) => a === p || a.startsWith(p + '/')) }
 for (const d of [PENDING, VERDICTS]) mkdirSync(d, { recursive: true })
 const now = () => new Date().toISOString().slice(11, 19)
 const log = (m) => process.stderr.write(`[broker ${now()}] ${m}\n`)

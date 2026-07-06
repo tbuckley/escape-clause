@@ -26,11 +26,19 @@ it keeps running):
 ```bash
 cd example-plugin
 claude \
+  --strict-mcp-config --mcp-config .mcp.json \
   --channels plugin:fakechat@claude-plugins-official \
   --dangerously-load-development-channels server:broker
 ```
 
-- `--channels plugin:fakechat@...` — the chat surface (allowlisted plugin).
+- `--strict-mcp-config --mcp-config .mcp.json` — load **only** the broker MCP server and
+  ignore every other configured server (claude.ai Gmail/Drive/Calendar, anything in user
+  config). This makes the MCP posture an *allowlist* — the one server we vetted — instead
+  of relying on the `permissions.deny` list to name every dangerous server; those denies
+  stay as a backstop. Without this flag, a newly-connected MCP server (network + private
+  data, running unsandboxed) would be exposed by default.
+- `--channels plugin:fakechat@...` — the chat surface (allowlisted plugin; loaded via the
+  channel/plugin mechanism, not MCP config, so `--strict-mcp-config` leaves it intact).
 - `--dangerously-load-development-channels server:broker` — our custom broker channel
   (custom channels need this flag during the research preview).
 
@@ -106,11 +114,16 @@ variant has no `canUseTool` backstop, containment rests entirely on the settings
 - **`guard.mjs` (a `PreToolUse` hook)** blocks the native file tools on protected paths.
   These tools bypass `sandbox.filesystem.denyRead` (which only covers bash), and per-tool
   deny rules are leaky — you'd need `Read()`, `Edit()`, `Write()`, `Grep()`, `Glob()`, …
-  and any future tool. One hook is the global choke point: it runs before every tool call,
-  checks the path, and denies — the settings equivalent of the driver's `canUseTool`.
-- **`mcp__claude_ai_Gmail/Google_Calendar/Google_Drive`** denied in `permissions.deny` — MCP
-  servers run outside the sandbox, so any connected integration is a network + private-data
-  path. If you've connected other MCP servers, deny those too, or launch with
-  `--strict-mcp-config` so only the broker is loaded. Check what's live with `/mcp`.
+  and any future tool. The hook is wired with a `*` matcher, so it is a true global choke
+  point: it runs before *every* tool call, resolves the target path with `realpath` (so a
+  workspace symlink or `..` can't disguise a protected target), and denies — the settings
+  equivalent of the driver's `canUseTool`. Its behavioral denial is exercised by the audit's
+  Part D.
+- **MCP is loaded as an allowlist, not a denylist.** The documented launch uses
+  `--strict-mcp-config --mcp-config .mcp.json`, so *only* the broker server loads and every
+  other configured MCP server (claude.ai Gmail/Calendar/Drive, user-config servers) is
+  ignored regardless of what's connected — MCP servers run outside the sandbox, so each is a
+  network + private-data path. The explicit `mcp__claude_ai_*` entries in `permissions.deny`
+  remain as a backstop for anyone who drops the strict flag. Check what's live with `/mcp`.
 
 Verify all of it with `../tests/sandbox-audit.mjs`.

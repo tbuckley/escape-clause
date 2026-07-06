@@ -73,7 +73,7 @@ bubblewrap + socat on Linux, with a host-side proxy enforcing a domain allowlist
     "enabled": true,
     "failIfUnavailable": true,
     "allowUnsandboxedCommands": false,
-    "autoApprove": true,
+    "autoAllowBashIfSandboxed": true,
     "excludedCommands": [],
     "network": { "allowedDomains": [] },
     "filesystem": {
