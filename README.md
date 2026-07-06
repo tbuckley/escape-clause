@@ -2,11 +2,16 @@
 
 **Run Claude Code in a locked-down sandbox — and give it a safe, human-approved way back out.**
 
-Escape Clause lets an AI agent work autonomously inside a box with **no network and no host
-access**, while anything it needs from the outside world (run a host command, fetch a
-URL) goes through a **broker**: the agent files a request, you review it in a web UI
-(with an AI-generated risk summary), and only what you approve actually runs. Approved
-results are pushed back into the agent's session so it can keep working without polling.
+Running an autonomous coding agent usually means picking a bad trade: babysit every
+permission prompt, or hand it your machine with `--dangerously-skip-permissions` and
+hope. Escape Clause is a third option: the agent works freely inside a box with **no
+network and no host access**, and anything it needs from the outside world (run a host
+command, fetch a URL) goes through a **broker** — the agent files a request, you review
+it in a web UI (with an AI-generated risk summary), and only what you approve actually
+runs. Approved results are pushed back into the agent's session so it keeps working
+without polling.
+
+![The approval queue: each request shows the exact command, an AI risk summary, and the agent's justification — quarantined as an untrusted claim.](docs/img/approval-ui.png)
 
 ```
 you (chat UI) ──▶ agent (interactive claude, sandboxed: no network/host)
@@ -26,6 +31,39 @@ and understandable. `init` writes plain JSON config files you can read; `launch`
 `claude` command it prints so you can run it yourself; nothing is rewritten behind your
 back — when the config doesn't match what `init` would write, launch refuses and tells
 you why instead of silently fixing it.
+
+> **Status:** a research exploration / working demo, not a hardened product. It leans on
+> Claude Code preview features (plugin channels, `--dangerously-load-development-channels`).
+> Last tested with **Claude Code v2.1.202**; re-run the
+> [audit](#6-verify-the-sandbox-recommended) after any `claude` upgrade, since upgrades
+> can change sandbox behavior. See [Not included (yet)](#not-included-yet) for the
+> distance to the fuller design.
+
+## Contents
+
+- [Words you'll meet](#words-youll-meet)
+- [What's in the box](#whats-in-the-box)
+- [Getting started](#getting-started)
+- [Stopping and uninstalling](#stopping-and-uninstalling)
+- [Troubleshooting](#troubleshooting)
+- [Repo layout](#repo-layout)
+- [Going deeper](#going-deeper)
+- [Not included (yet)](#not-included-yet)
+- [License](#license)
+
+## Words you'll meet
+
+If you use Claude Code casually, a few terms here may be new:
+
+| Term | Meaning |
+|---|---|
+| **MCP server** | A local process exposing tools an agent can call ([Model Context Protocol](https://modelcontextprotocol.io)). The broker is one. |
+| **Channel** | A Claude Code mechanism that can *push* messages into a running session — how approvals wake the agent without polling. See the [channels docs](https://code.claude.com/docs/en/channels-reference). |
+| **fakechat** | An off-the-shelf Claude Code plugin channel that serves a local web chat UI — it's how you talk to the sandboxed agent. Not part of this repo. |
+| **Broker** | This project's MCP server + channel: files tickets, runs policies, serves the approval UI, pushes outcomes back. |
+| **Ticket** | A snapshotted request (`REQ-N`) — the exact command/URL/script captured at request time; approving runs *that snapshot*, not whatever changed since. |
+| **Policy** | A named, hash-pinned script with a risk class; `readonly` ones auto-run, risky classes always ticket. |
+| **Protected install** | `~/.escape-clause/` — broker code + state, deliberately outside every workspace the agent can touch. |
 
 ## What's in the box
 
@@ -57,8 +95,9 @@ web chat UI); the broker handles requests, policies, review, and notifications.
 
 ### Prerequisites
 
-- [Claude Code](https://code.claude.com) installed and signed in
-- Node.js (any recent version) and npm
+- [Claude Code](https://code.claude.com) installed and signed in (last tested with
+  v2.1.202 — check yours with `claude --version`)
+- Node.js **20 or newer** and npm
 - The **fakechat** plugin — install it once from inside any `claude` session:
   ```
   /plugin install fakechat@claude-plugins-official
@@ -76,8 +115,9 @@ cd escape-clause
 ```
 
 This copies the broker to `~/.escape-clause/app` — deliberately **outside** any
-directory the agent can write to — and prints the web UI password (stored at
-`~/.escape-clause/secrets/password`; overwrite that file to choose your own).
+directory the agent can write to — installs its npm dependencies there, and prints the
+web UI password (stored at `~/.escape-clause/secrets/password`; overwrite that file to
+choose your own).
 
 ### 2. Initialize a workspace
 
@@ -114,12 +154,23 @@ claude --channels plugin:fakechat@claude-plugins-official \
 On first launch, claude asks you to trust the workspace — accept. A startup line
 confirms the broker channel is live: `Channels: server:broker`.
 
+> Tip: if you've launched before, free fakechat's port first —
+> `lsof -ti :8787 | xargs kill` — or your first message can vanish into an orphaned
+> server from the previous session. Details in
+> [Troubleshooting](#fakechat-swallows-your-first-message-after-a-relaunch).
+
 ### 4. Open the two UIs
 
-| URL | What it is |
-|---|---|
-| http://localhost:8787 | **fakechat** — chat with the agent |
-| http://127.0.0.1:8790 | **approval UI** — sign in with the password from step 1 |
+Everything binds to localhost. The full port map:
+
+| Port | What | Who serves it |
+|---|---|---|
+| [8787](http://localhost:8787) | **fakechat** — chat with the agent | fakechat plugin |
+| [8790](http://127.0.0.1:8790) | **approval UI** — sign in with the password from step 1 | broker (`ESCAPE_CLAUSE_UI_PORT` moves it) |
+| 8791 | deny-all HTTP proxy (all sandboxed egress dies here) | broker (`ESCAPE_CLAUSE_PROXY_PORT` moves the pair) |
+| 8792 | deny-all SOCKS5 proxy (git-ssh, ftp, grpc, rsync) | broker (always HTTP proxy port + 1) |
+
+You only ever open the first two in a browser; the proxies exist to refuse.
 
 ### 5. Try it
 
@@ -152,15 +203,30 @@ ticket, with its full source (and a diff, if it updates an existing policy) for 
 
 ```bash
 cd tests
+npm install
 node sandbox-audit.mjs
 ```
 
 The audit doesn't trust anyone's self-report — it spawns probe agents that actively try
 to escape (curl out, write outside the workspace, read denied paths, disable the
-sandbox) and ground-truths every result against decoy files. Exits `0` if sound. Re-run
-it after every `claude` upgrade, since upgrades can change sandbox behavior.
+sandbox) and ground-truths every result against decoy files. It launches real agent
+sessions, so it takes a few minutes and consumes API tokens. Exits `0` if sound. Re-run
+it after every `claude` upgrade, since upgrades can change sandbox behavior. What it
+probes, part by part: [tests/README.md](tests/README.md).
 
-### Known issue: fakechat swallows your first message after a relaunch
+## Stopping and uninstalling
+
+- **Stop a session**: exit `claude` (Ctrl+C twice or `/exit`) in the launch terminal.
+  The broker, its UIs, and the proxies all run inside that session's process tree and
+  die with it. If a fakechat orphan lingers on 8787, kill it:
+  `lsof -ti :8787 | xargs kill`.
+- **Uninstall**: `rm -rf ~/.escape-clause` removes the broker install and all its state
+  (tickets, policies, password, `audit.log`). A workspace stays a normal directory —
+  delete its stamped `.claude/`, `.mcp.json`, and `CLAUDE.md` if you want it pristine.
+
+## Troubleshooting
+
+### fakechat swallows your first message after a relaunch
 
 Symptom: you launch a session, open fakechat, send a message — the agent never sees it,
 and on refresh the fakechat server is gone.
@@ -177,6 +243,18 @@ Fix: kill the orphan **before** launching (`lsof -ti :8787 | xargs kill`), or �
 you've already hit it — run `/mcp` in the claude terminal and reconnect fakechat, which
 now binds cleanly. Messages sent before the reconnect are lost; resend them.
 
+### Is the sandbox actually on?
+
+Ask the agent to run `env | grep SANDBOX_RUNTIME` — `SANDBOX_RUNTIME=1` only appears
+when sandboxed, and `HTTP_PROXY` should point at the deny-all proxy on `:8791`. For real
+assurance, run the [audit](#6-verify-the-sandbox-recommended).
+
+### `launch` refuses to start
+
+That's the config verifier working: the stamped workspace config no longer matches what
+`init` would write — a stale init, changed `ESCAPE_CLAUSE_*` env vars, or tampering.
+Inspect the file it names, then re-run `init` (with the same env you'll launch with).
+
 ## Repo layout
 
 | Path | What it is |
@@ -190,210 +268,32 @@ now binds cleanly. Messages sent before the reconnect are lost; resend them.
 | `guard.mjs` | Fail-closed `PreToolUse` hook denying file tools on protected paths |
 | `escape-clause.sh` | `install` / `init` / `launch` |
 | `templates/CLAUDE.md` | Rules-of-the-box instructions stamped into new workspaces |
-| `docs/` | Design docs and proposals |
+| `docs/` | Architecture, security model, design docs and proposals |
 | `tests/` | The adversarial sandbox audit |
 
-## How it works
+## Going deeper
 
-### The launcher
-
-Two commands with one job each:
-
-1. **`escape-clause.sh init <workspace>` stamps the workspace config** —
-   `.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json` — from the
-   protected install, and drops a `CLAUDE.md` if the workspace has none.
-2. **`escape-clause.sh launch <workspace>` runs claude** — it prints and execs
-   `claude --channels plugin:fakechat@claude-plugins-official
-   --dangerously-load-development-channels server:broker` in the workspace. First,
-   though, it verifies the stamped config is byte-identical to what `init` would write
-   right now; if not — a stale init, changed `ESCAPE_CLAUSE_*` env, or tampering — it
-   refuses and tells you to inspect and re-run `init`. Tampering from inside the box
-   shouldn't be possible at all (file tools are guard-blocked and sandboxed bash is
-   denyWrite-blocked on the config paths), so the verify is a backstop, not the
-   defense. A tampered config is never what actually launches, and nothing is
-   rewritten behind your back.
-
-- `--channels plugin:fakechat@...` — the chat surface. fakechat is a plugin channel: it
-  ships its own MCP server that serves the web UI on `localhost:8787` and delivers the
-  reply tool.
-- `--dangerously-load-development-channels server:broker` — promotes the broker MCP
-  server to a channel so it can push notifications (custom channels need this flag
-  during the research preview). The broker itself loads from the stamped `.mcp.json`
-  (`enableAllProjectMcpServers` + the pre-trust in the stamped `settings.local.json`) —
-  and its command path points into `~/.escape-clause/app`, not the workspace.
-
-Both commands refuse the broker source tree and the protected store as workspaces —
-the whole point is keeping broker code out of the agent's reach.
-
-The stamped sandbox config lands at `<workspace>/.claude/settings.json` so it
-auto-loads — no `--settings` flag needed. You can confirm the sandbox is live by asking
-the agent to run `env | grep SANDBOX_RUNTIME` — `SANDBOX_RUNTIME=1` only appears when
-sandboxed (and `HTTP_PROXY` should point at the deny-all proxy on `:8791`).
-
-### Why interactive claude (and not headless `-p`)
-
-Pushing an async approve/reject notification into a running session needs the channel
-spec, and a *custom* channel plugin **does not activate in headless (`-p`) mode** — its
-notifications are silently dropped (verified). In an interactive session it does
-activate and deliver, so the full loop works: chat in via fakechat → agent files a
-broker request → you approve → the broker pushes a `<channel source="broker">`
-notification → the agent wakes and acts on it. (An earlier variant drove headless claude
-via the Agent SDK's input stream — see git history for that pattern.)
-
-### Sharing a request with a remote user
-
-When the agent files a ticket it gets back a credential-free `url` (e.g.
-`http://127.0.0.1:8790/?req=REQ-2`) and is told to relay it, so a user chatting over
-fakechat gets a link straight to that request, which the UI scrolls to and highlights.
-On a device that hasn't signed in yet, the link lands on the login form first — enter
-the password once and the request is right there. If the UI is reachable off-box
-(Tailscale, a tunnel, a domain), set **`ESCAPE_CLAUSE_UI_URL`** when you run `init` so
-shared links resolve for the remote user; it defaults to `http://127.0.0.1:<port>`. The shared
-URL is deliberately credential-free — the sandboxed agent never receives the password or
-a session, only a pointer to the request.
-
-### Permission relay — answer the terminal's own prompts from the UI
-
-The broker also declares the channel
-[permission-relay capability](https://code.claude.com/docs/en/channels-reference#relay-permission-prompts)
-(`claude/channel/permission`). When Claude Code itself opens a tool-approval dialog — a
-`Bash`/`Write`/`Edit` prompt — it forwards that prompt to the broker, which surfaces it
-in the same 8790 queue as a `permission` item (with an AI risk summary). Approve/Deny
-there emits the verdict back to Claude Code. The terminal dialog stays open in parallel;
-whichever answers first wins, so this is a second way to answer, not an auto-deny.
-
-Set the mode with `ESCAPE_CLAUSE_RELAY` when you run `init` — it's stamped into the
-workspace `.mcp.json` env. Keep it set for `launch` too, since launch verifies the
-config against the current environment:
-
-```bash
-export ESCAPE_CLAUSE_RELAY=forward
-~/.escape-clause/app/escape-clause.sh init ~/escape-clause-workspace
-~/.escape-clause/app/escape-clause.sh launch ~/escape-clause-workspace
-```
-
-| Mode | Behavior |
-|---|---|
-| `forward` | Surface each relayed prompt in the UI queue and wait for a human verdict. Best when you want to review. |
-| `deny` (stamped default) | Auto-deny every relayed prompt immediately — no human, no UI ticket, just an `audit.log` entry. |
-| `off` | Don't declare the relay capability at all; prompts stay in the terminal. |
-
-`deny` is the "my allow-list is complete" mode: the stamped `settings.json` already
-auto-allows every tool the box is meant to have, so anything that still reaches the
-relay is by definition not pre-approved and gets denied without a human. That means your
-allow-list must actually be complete — a tool you forgot to allow gets silently denied,
-not prompted.
-
-The broker is the right home for this capability and **fakechat is not**: the docs warn
-that anyone who can reply through a permission-relaying channel can approve or deny tool
-use, so it may only be declared on a channel that authenticates the approver. The
-broker's UI is behind a password login; fakechat has no auth, so it must never declare
-it.
-
-Note the relay does **not** cover the `SandboxNetworkAccess` prompt (a sandboxed command
-reaching an off-allowlist domain) — that never relays in any mode (verified). Killing
-those prompts is the deny-all proxy's job, below.
-
-### Deny-all egress proxy
-
-To make network egress fail closed with **no prompt at all**, the broker replaces the
-built-in sandbox proxy entirely: `proxy.mjs` is a deny-all HTTP proxy on
-`127.0.0.1:8791` plus a deny-all SOCKS5 listener on `8792` for the non-HTTP protocols
-the sandbox routes over SOCKS (git-ssh, ftp, grpc, rsync). `ESCAPE_CLAUSE_PROXY_PORT` moves
-the pair; SOCKS is always HTTP+1. The stamped `.claude/settings.json` points the sandbox
-at both:
-
-```json
-{ "sandbox": { "network": { "allowedDomains": [], "httpProxyPort": 8791, "socksProxyPort": 8792 } } }
-```
-
-With [`httpProxyPort`/`socksProxyPort`](https://code.claude.com/docs/en/sandboxing#custom-proxy-configuration)
-set, all sandboxed traffic routes to the custom proxies and the built-in proxy — and its
-"allow this domain?" prompt — is out of the path. The policy is: deny everything,
-instantly, audit-logged.
-
-Verified behaviorally, all three states fail closed:
-
-- **proxy up**: sandboxed `curl https://example.com` dies immediately with
-  `CONNECT tunnel failed, response 403`; the attempt lands in `broker.log` and
-  `audit.log`. No dialog.
-- **port dead** (broker crashed): instant `connection refused` — the sandbox still
-  routes to the configured port; there is no fallback to the built-in proxy or its
-  prompt.
-- **second session** (port already held): served by whichever broker got the port —
-  which runs the same deny-all policy.
-
-The proxy only ever refuses — it executes nothing and has no approval surface — so
-unlike the ticket path there is nothing on it to protect. Legitimate egress still goes
-through the broker (`fetch-url` policy or a ticket), where a human reviews the exact
-request.
-
-## Security posture
-
-Why the **approve path** is out of the agent's reach — three independent layers:
-
-1. The sandbox routes all egress to the deny-all proxy (empty `allowedDomains` behind
-   it), blocking bash from **all** hosts including localhost — so the agent can't even
-   reach the approval UI's port (verified by the audit's Part E).
-2. The MCP surface has **no resolve tool** — by construction there is no code path from
-   an agent-invokable interface to a ticket-state transition. Resolution exists only on
-   the web UI's authenticated endpoints.
-3. Approve/deny require a **login session**: the password lives in
-   `~/.escape-clause/secrets/password` (denyRead- and guard-protected), and the session
-   rides in an HttpOnly `SameSite=Lax` cookie the page's JS can't read. Every API route
-   (reads included) is session-gated; five wrong passwords locks login for 30 seconds;
-   logins and failures land in `audit.log`.
-
-And why the **broker itself** is out of the agent's reach:
-
-4. The broker's code runs from `~/.escape-clause/app` — inside the same denyRead- and
-   guard-protected dir as its state — never from the agent's writable workspace. (An
-   earlier version kept it in the workspace; the agent could then rewrite the very code
-   that executes approvals, and its edits would run with full host privileges at the
-   next launch.)
-5. The workspace launch config (`.claude/`, `.mcp.json`) is protected three ways:
-   guard-blocked against file tools, `sandbox.filesystem.denyWrite`-blocked against
-   sandboxed bash (OS-enforced; the audit's Part C tamper-probes it), **and** verified
-   byte-for-byte against the protected install on every launch — drift refuses to
-   launch. Pointing `.mcp.json` at a different broker or dropping the sandbox doesn't
-   survive to a next session.
-6. The guard hook is loaded from the protected install and **fails closed**
-   (`node …/guard.mjs || exit 2`): a missing or crashing guard blocks tool calls
-   instead of waving them through.
-
-Some details worth knowing:
-
-- **`guard.mjs` (a `PreToolUse` hook)** blocks the native file tools on protected
-  paths. Those tools bypass `sandbox.filesystem.denyRead` (which only covers bash), and
-  per-tool deny rules are leaky — you'd need `Read()`, `Edit()`, `Write()`, `Grep()`,
-  `Glob()`, … and any future tool. The hook is wired with a `*` matcher, so it's a true
-  global choke point: it runs before every tool call, resolves the target with
-  `realpath` (so a symlink or `..` can't disguise a protected target), and denies — the
-  settings equivalent of the Agent SDK's `canUseTool`. Exercised by the audit's Part D.
-- **Non-broker MCP is denied by a denylist** (`mcp__claude_ai_Gmail/Calendar/Drive` in
-  `permissions.deny`). MCP servers run outside the sandbox, so each connected one is a
-  network + private-data path. The stronger posture is an allowlist
-  (`--strict-mcp-config --mcp-config .mcp.json`, loading only the vetted broker) — but
-  that flag also strips **plugin-provided** MCP servers, and fakechat *is* one, so
-  strict mode disables the chat surface entirely. The denylist is genuinely weaker: you
-  must name each dangerous server, and one connected later isn't denied by default.
-  **Check `/mcp` for anything unexpected and deny it.** (fakechat itself won't appear
-  in `/mcp` — channels are listed separately, confirmed by the startup `Channels:`
-  line. If you don't need a plugin chat surface, prefer the strict allowlist.)
-- **Hash pinning** makes policy review meaningful: policy bytes live only in the
-  private store, invoked as `execve(script, args)` — never a shell. A workspace copy the
-  agent edits after approval is irrelevant, and an *update* re-enters review with an
-  old→new diff (proven by audit Part F).
-- **Tickets snapshot the exact argv/script at request time** — the approved bytes are
-  what run, not whatever the agent has changed since.
-
-Verify all of it with `node tests/sandbox-audit.mjs` (Parts E–G cover the broker
-surface: UI unreachable from the sandbox, hash pinning holds, auto-approve stays in
-class).
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — how it works: the launcher and
+  config stamping, why the session is interactive (not headless `-p`), sharing request
+  links with remote users, the permission relay modes, and the deny-all egress proxy.
+- **[docs/SECURITY.md](docs/SECURITY.md)** — the layered security posture: the three
+  independent layers keeping the approve path out of the agent's reach, the three
+  keeping the broker itself out, and the sharp edges worth knowing (guard hook, MCP
+  denylist vs. allowlist, hash pinning).
+- **[tests/README.md](tests/README.md)** — what the adversarial audit actually probes.
+- **[docs/securing-agent.md](docs/securing-agent.md)** — the motivating essay: why
+  containment plus a brokered escape hatch, rather than trust.
+- **[docs/PROPOSAL.md](docs/PROPOSAL.md)** and
+  **[docs/claude-cli-security-proposal.md](docs/claude-cli-security-proposal.md)** —
+  the fuller design this demo is a slice of.
 
 ## Not included (yet)
 
-See `docs/claude-cli-security-proposal.md` and `docs/PROPOSAL.md` for the fuller
-design. Not in this demo: file-reference payloads + CAS ingestion, cooldowns and rate
-caps, phone push, passkey + tailnet binding for the UI (the demo uses a password login +
-session cookie on localhost), the batch audit digest, and subagent launching.
+See the proposals above for the fuller design. Not in this demo: file-reference
+payloads + CAS ingestion, cooldowns and rate caps, phone push, passkey + tailnet
+binding for the UI (the demo uses a password login + session cookie on localhost), the
+batch audit digest, and subagent launching.
+
+## License
+
+[MIT](LICENSE).
