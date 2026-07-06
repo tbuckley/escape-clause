@@ -81,7 +81,8 @@ The sandbox config lives at **`.claude/settings.json`** so it auto-loads when yo
 `claude` from this directory — no `--settings` flag needed. (A plain `settings.json` in the
 project root is *not* auto-loaded, which would silently run with no sandbox at all. The
 audit's Part C verifies the sandbox actually engages on launch.) You can confirm it's live
-by asking the agent to run `env | grep srt` — the `srt:` proxy only appears when sandboxed.
+by asking the agent to run `env | grep SANDBOX_RUNTIME` — `SANDBOX_RUNTIME=1` only appears
+when sandboxed (and `HTTP_PROXY` should point at the deny-all proxy on `:8791`).
 
 On first launch claude asks you to trust the workspace and the new MCP server — accept
 both. A startup line confirms the channel: `Channels: server:broker`. (Prereq: install
@@ -119,12 +120,16 @@ the full source (and a diff, if it updates an existing policy) rendered for revi
 
 The broker also declares the channel [permission-relay capability](https://code.claude.com/docs/en/channels-reference#relay-permission-prompts)
 (`claude/channel/permission`). When **Claude Code itself** opens a tool-approval dialog —
-a `Bash`/`Write`/`Edit` prompt, or the `SandboxNetworkAccess` prompt you get when a
-sandboxed command reaches an off-allowlist domain — it forwards that prompt to the broker,
-which surfaces it in the **same 8790 queue** as a `permission` item (with an AI risk
-summary). Approve/Deny there emits the verdict back to Claude Code. The terminal dialog
-stays open in parallel; **whichever answers first wins**, so this is a second way to
-answer, not an auto-deny.
+a `Bash`/`Write`/`Edit` prompt — it forwards that prompt to the broker, which surfaces it
+in the **same 8790 queue** as a `permission` item (with an AI risk summary). Approve/Deny
+there emits the verdict back to Claude Code. The terminal dialog stays open in parallel;
+**whichever answers first wins**, so this is a second way to answer, not an auto-deny.
+
+**What the relay does NOT cover:** the `SandboxNetworkAccess` prompt (a sandboxed command
+reaching an off-allowlist domain) is never relayed — the docs scope relay to *tool-use
+approvals*, and we confirmed behaviorally that no domain prompt ever reaches the broker in
+any relay mode. Suppressing those prompts is the [deny-all egress proxy](#deny-all-egress-proxy)'s
+job, which kills them at the source.
 
 This is why the broker is the right home for it and **fakechat is not**: the docs warn
 that *anyone who can reply through the channel can approve or deny tool use*, so the
@@ -148,27 +153,49 @@ Set it in the broker's `.mcp.json` entry:
 | `deny` | **Auto-deny every relayed prompt immediately** — no human, no UI ticket, just an `audit.log` entry. |
 | `off` | Don't declare the relay capability at all; prompts stay in the terminal (pre-relay behavior). |
 
-**`deny` is the "just shut down the domain prompts" mode.** The premise: your
-`settings.json` already auto-allows every tool you care about (`Bash`, `Read`, `Edit`, …
-and the broker/fakechat MCP tools), so *anything that still reaches the relay is by
-definition not pre-approved* — most commonly the `SandboxNetworkAccess` prompt from a
-sandboxed command hitting an off-allowlist domain. Auto-denying it is the settings-only
-equivalent of the driver's `canUseTool` instant-deny: the command fails closed with no
-prompt (the terminal dialog may flash and auto-close as the broker's deny wins the race).
-It flips the plugin's "per-host network policy / instant deny ✗" in the table below to a ✓.
-Note this denies **anything** unapproved that reaches the relay, so your `settings.json`
-allow-list must be complete — a tool you forgot to allow gets silently denied, not prompted.
+**`deny` is the "my allow-list is complete" mode.** The premise: your `settings.json`
+already auto-allows every tool you care about (`Bash`, `Read`, `Edit`, … and the
+broker/fakechat MCP tools), so *anything that still reaches the relay is by definition not
+pre-approved* and gets denied without a human. Note this denies **anything** unapproved
+that reaches the relay, so your allow-list must be complete — a tool you forgot to allow
+gets silently denied, not prompted. It does **not** affect the `SandboxNetworkAccess`
+domain prompts, which never relay; see the next section for those.
 
-> **Manual check (the one piece the automated audit can't reach).** Permission relay only
-> fires in an **interactive** session — headless `-p` disables terminal-input prompts
-> entirely, so the audit (which drives `claude -p`) can't exercise it. The broker's side of
-> the contract is covered by a protocol-level test, but whether Claude Code forwards the
-> `SandboxNetworkAccess` prompt *specifically* is its behavior, not the broker's. To
-> confirm: in the interactive session, ask the agent to `curl https://example.com` directly
-> (not via the broker). A `permission` card for `SandboxNetworkAccess` should appear in the
-> 8790 UI alongside the terminal dialog. If only the terminal dialog appears, that prompt
-> type isn't relayed on your CLI version — but `Bash`/`Write`/`Edit` approvals, which take
-> the same path, still are.
+## Deny-all egress proxy
+
+The one prompt the relay can't touch is `SandboxNetworkAccess` — the dialog the built-in
+sandbox proxy opens when a sandboxed command reaches a domain not in `allowedDomains`. To
+make network egress **fail closed with no prompt at all**, the broker replaces that proxy
+entirely: `proxy.mjs` is a deny-all HTTP proxy on `127.0.0.1:8791` plus a deny-all SOCKS5
+listener on `8792` for the non-HTTP protocols the sandbox routes over SOCKS (git-ssh via
+`ProxyCommand`, ftp, grpc, rsync). `CLAWMINI_PROXY_PORT` moves the pair; SOCKS is always
+HTTP+1. `.claude/settings.json` points the sandbox at both:
+
+```json
+{ "sandbox": { "network": { "allowedDomains": [], "httpProxyPort": 8791, "socksProxyPort": 8792 } } }
+```
+
+With [`httpProxyPort`/`socksProxyPort`](https://code.claude.com/docs/en/sandboxing#custom-proxy-configuration)
+set, all sandboxed traffic routes to the custom proxies and the built-in proxy — and its
+prompt — is out of the path. (Leave `socksProxyPort` unset and non-HTTP protocols still
+route to the *built-in* SOCKS proxy, which can prompt — check `env | grep -i proxy` in a
+sandboxed shell to see the wiring.) The per-host decision is ours, and the policy is:
+deny everything, instantly, audit-logged. This flips the plugin's "per-host network
+policy / instant deny ✗" in the table below to a ✓.
+
+Verified behaviorally, all three states fail closed:
+
+- **proxy up**: sandboxed `curl https://example.com` dies immediately with
+  `CONNECT tunnel failed, response 403`; the attempt lands in `broker.log`
+  (`PROXY DENY CONNECT example.com:443`) and `audit.log` (`proxy_denied`). No dialog.
+- **port dead** (broker crashed): instant `connection refused` — the sandbox still routes
+  to the configured port and there is no fallback to the built-in proxy or its prompt.
+- **second session** (port already held): that broker's proxy logs `EADDRINUSE` and the
+  session is served by whichever broker got the port — which runs the same deny-all policy.
+
+The proxy only ever refuses — it executes nothing and has no approval surface — so unlike
+the ticket path there is nothing on it to protect. Legitimate egress still goes through
+the broker (`fetch-url` policy or a ticket), where a human reviews the exact request.
 
 ## How it works
 
@@ -196,10 +223,14 @@ you (fakechat UI) ──▶ agent (interactive claude, sandboxed: no network/hos
   (public-write).
 - `server.mjs` — the web UI: live queue (SSE), raw facts first, AI summary as an advisory
   panel, agent claim quarantined, POST-only approve/deny behind the bearer token.
+- `proxy.mjs` — deny-all egress proxy the sandbox routes through (`httpProxyPort`):
+  refuses every CONNECT/request instantly, audit-logged, no prompt. Fail-closed even when
+  down. The broker is the only way out of the box.
 - `reviewer.mjs` — one direct API call per ticket, verified facts only, strict JSON
   schema, cached by content hash. Advisory, never load-bearing.
-- `.mcp.json` / `.claude/settings.json` — register + pre-trust the broker; sandbox on with network
-  denied, so the agent *must* use the broker to leave the box.
+- `.mcp.json` / `.claude/settings.json` — register + pre-trust the broker; sandbox on with
+  network routed to the deny-all proxy (`httpProxyPort: 8791`), so the agent *must* use
+  the broker to leave the box.
 - `guard.mjs` — `PreToolUse` hook: one global choke point denying file tools on protected paths.
 - `CLAUDE.md` — tells the agent the rules of the box.
 
@@ -213,7 +244,7 @@ broker as a small side component. Trade-offs vs. the SDK-driver version:
 | claude runs | normally, interactive (tmux) | headless, driven by the broker |
 | async notifications | ✅ interactive only | ✅ headless too (input-stream) |
 | enforce "broker is the only exit" | sandbox denies; agent *should* use broker | `canUseTool` denies alternatives instantly |
-| per-host network policy / instant deny | ✗ (sandbox default behavior) | ✅ `canUseTool` |
+| per-host network policy / instant deny | ✅ deny-all egress proxy (`httpProxyPort`) | ✅ `canUseTool` |
 | sees full session / lifecycle control | ✗ | ✅ |
 | code size | smaller | larger |
 
@@ -221,8 +252,9 @@ broker as a small side component. Trade-offs vs. the SDK-driver version:
 
 Why the approve path is out of the agent's reach — three independent layers:
 
-1. the sandbox's empty network allowlist blocks bash from **all** hosts including
-   localhost (verified; re-proven by the audit's Part E against the live UI port);
+1. the sandbox routes all egress to the deny-all proxy (`httpProxyPort`, empty
+   `allowedDomains` behind it), blocking bash from **all** hosts including localhost
+   (verified; re-proven by the audit's Part E against the live UI port);
 2. the **MCP surface has no resolve tool** — by construction there is no code path from
    an agent-invokable interface to a ticket-state transition;
 3. approve/deny require the bearer token in `~/.clawmini-demo/secrets/`, which is

@@ -1,1 +1,13 @@
-{ "mcpServers": { "broker": { "command": "node", "args": ["/Users/tbuckley/projects/clawmini-claude/example-plugin/broker.mjs"] } } }
+{
+  "mcpServers": {
+    "broker": {
+      "command": "node",
+      "args": [
+        "/Users/tbuckley/projects/clawmini-claude/example-plugin/broker.mjs"
+      ],
+      "env": {
+        "CLAWMINI_RELAY": "deny"
+      }
+    }
+  }
+}

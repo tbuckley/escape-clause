@@ -2,13 +2,17 @@
 // Clawmini broker — PURE PLUGIN version, with a real approval surface.
 //
 // claude runs NORMALLY (interactive, e.g. in tmux). The broker is one stdio process
-// playing three roles:
+// playing four roles:
 //   - MCP server (+ channel spec, so it can PUSH async approve/reject outcomes into the
 //     session): tools request_action / list_policies / check_policy / register_policy
 //   - policy engine: named scripts pinned by hash in the private store; readonly and
 //     private-write classes auto-run, everything else files a ticket (policies.mjs)
 //   - approval web UI on http://127.0.0.1:8790 with AI risk summaries (server.mjs,
 //     reviewer.mjs) — the ONLY place tickets get resolved; MCP can't resolve by design
+//   - deny-all egress proxies on 127.0.0.1:8791 (HTTP) + 8792 (SOCKS5, for git-ssh/ftp/
+//     grpc/rsync) (proxy.mjs) — settings.json points the sandbox at them
+//     (sandbox.network.httpProxyPort/socksProxyPort), so off-allowlist network fails
+//     closed instantly with no SandboxNetworkAccess prompt; the broker is the only exit
 //
 // State is durable JSON under ~/.clawmini-demo (store.mjs), which the sandbox + guard
 // hook deny to the agent. Tickets snapshot the exact argv/script at request time; the
@@ -24,6 +28,7 @@ import { DIR, audit, nextTicketId, saveTicket, getTicket } from './store.mjs'
 import { CLASSES, AUTO_CLASSES, NAME_RE, getPolicy, listPolicies, policyScript, installPolicy, runPolicy, seedPolicies } from './policies.mjs'
 import { review } from './reviewer.mjs'
 import { startServer } from './server.mjs'
+import { startProxy } from './proxy.mjs'
 
 const PORT = Number(process.env.CLAWMINI_UI_PORT || 8790)
 // Base URL the USER reaches the review UI at — override when the UI is behind a tunnel /
@@ -38,10 +43,13 @@ const log = (m) => { const s = `[${new Date().toISOString().slice(11, 19)}] ${m}
 //   forward (default) — surface it in the UI queue and wait for a human verdict
 //   deny              — auto-deny it immediately, no human, no UI ticket (just audit-logged).
 //                       Use this when settings.json already auto-allows everything legitimate:
-//                       anything reaching the relay is by definition NOT pre-approved, so denying
-//                       it is the settings-only equivalent of the driver's canUseTool deny — it
-//                       shuts down the SandboxNetworkAccess (off-allowlist domain) prompts silently.
+//                       anything reaching the relay is by definition NOT pre-approved.
 //   off               — don't declare the relay capability at all; prompts stay in the terminal.
+// SCOPE (verified against the channels docs + behaviorally): the relay only ever receives
+// TOOL-USE approvals (Bash/Write/Edit class). The SandboxNetworkAccess (off-allowlist
+// domain) prompt is NOT relayed — it never reaches the broker in any mode. Domain prompts
+// are instead eliminated at the source by the deny-all egress proxy (proxy.mjs), which
+// replaces the built-in sandbox proxy that generates them.
 const RELAY = ['forward', 'deny', 'off'].includes((process.env.CLAWMINI_RELAY || '').toLowerCase())
   ? process.env.CLAWMINI_RELAY.toLowerCase() : 'forward'
 
@@ -54,9 +62,10 @@ const mcp = new Server(
   { name: 'broker', version: '0.1.0' },
   {
     // claude/channel/permission (added above unless RELAY=off) is what makes Claude Code forward
-    // its OWN tool-approval prompts (Bash/Write/Edit, and the SandboxNetworkAccess egress prompt)
-    // to the broker. Safe to declare only because this channel authenticates the approver (bearer
-    // token on 8790); fakechat, which has no auth, must NOT declare it.
+    // its OWN tool-approval prompts (Bash/Write/Edit class; NOT the SandboxNetworkAccess egress
+    // prompt, which never relays) to the broker. Safe to declare only because this channel
+    // authenticates the approver (bearer token on 8790); fakechat, which has no auth, must NOT
+    // declare it.
     capabilities: { experimental, tools: {} },
     instructions:
       'The broker lets you act OUTSIDE your sandbox (network/host), which is otherwise blocked. ' +
@@ -292,7 +301,8 @@ function notify(ticket, verdict, body) {
 
 // ---------- permission relay ----------
 // Claude Code (the harness, NOT the agent) calls this when one of ITS OWN tool-approval
-// dialogs opens — Bash/Write/Edit, and the synthetic SandboxNetworkAccess egress prompt.
+// dialogs opens — Bash/Write/Edit class only; the SandboxNetworkAccess egress prompt is
+// not relayed (that case is handled by the deny-all proxy instead, see proxy.mjs).
 // We surface it in the same UI queue as broker tickets (kind: 'permission'); resolving it
 // there emits the allow/deny verdict above. Only fires in interactive mode — in headless
 // `-p` the harness disables prompts entirely, so nothing is relayed.
@@ -337,5 +347,7 @@ mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
 })
 
 const ui = startServer({ port: PORT, baseUrl: UI_URL, resolveTicket, log })
+const PROXY_PORT = Number(process.env.CLAWMINI_PROXY_PORT || 8791)
+startProxy({ port: PROXY_PORT, socksPort: PROXY_PORT + 1, log, audit })
 await mcp.connect(new StdioServerTransport())
 log(`broker up (stdio MCP + channel, relay=${RELAY}). store: ${DIR}`)

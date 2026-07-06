@@ -127,6 +127,11 @@ function configChecks() {
   out.push({ name: 'example-plugin/ denies WebFetch/WebSearch', sev: 'critical',
     pass: !!sp?.permissions?.deny && ['WebFetch', 'WebSearch'].every(t => sp.permissions.deny.includes(t)),
     detail: JSON.stringify(sp?.permissions?.deny || []) })
+  // deny-all egress proxy: without httpProxyPort the sandbox is still deny-all (empty
+  // allowlist) but off-allowlist commands PROMPT instead of failing closed — hardening.
+  out.push({ name: 'example-plugin/ egress routed to deny-all proxy (httpProxyPort)', sev: 'hardening',
+    pass: Number.isInteger(s?.network?.httpProxyPort),
+    detail: Number.isInteger(s?.network?.httpProxyPort) ? `httpProxyPort=${s.network.httpProxyPort} (no SandboxNetworkAccess prompts; fails closed)` : 'MISSING — off-allowlist domains prompt instead of failing closed' })
 
   // escape hatch must be closed in BOTH examples (the audit proved it's exploitable otherwise)
   out.push({ name: 'example/ escape hatch closed (allowUnsandboxedCommands:false)', sev: 'critical',
@@ -173,7 +178,9 @@ function pluginLaunchCheck() {
   const probe = join(dir, 'launch_probe.txt')
   rmSync(probe, { force: true })
   try {
-    spawnSync('claude', ['-p', 'Run this bash command exactly and do not use any other tool: (env | grep -q "srt:" && echo SANDBOXED || echo NO_SANDBOX) > ./launch_probe.txt ; echo done'],
+    // sandbox marker: SANDBOX_RUNTIME=1 (srt: proxy URLs disappeared once the examples
+    // switched to a custom egress proxy via httpProxyPort, so don't grep for those)
+    spawnSync('claude', ['-p', 'Run this bash command exactly and do not use any other tool: (env | grep -qE "^SANDBOX_RUNTIME=|srt:" && echo SANDBOXED || echo NO_SANDBOX) > ./launch_probe.txt ; echo done'],
       { cwd: dir, input: '', timeout: 120000, encoding: 'utf8', stdio: ['pipe', 'ignore', 'ignore'] })
   } catch {}
   let content = ''; try { content = readFileSync(probe, 'utf8') } catch {}
@@ -240,7 +247,8 @@ function guardHookCheck() {
 function brokerClient({ store, cwd, port }) {
   const child = spawn('node', [join(ROOT, 'example-plugin/broker.mjs')], {
     cwd,
-    env: { ...process.env, CLAWMINI_DIR: store, CLAWMINI_UI_PORT: String(port), ANTHROPIC_API_KEY: '' }, // no reviewer billing
+    // side ports for UI AND egress proxy so the audit broker never races a live session's
+    env: { ...process.env, CLAWMINI_DIR: store, CLAWMINI_UI_PORT: String(port), CLAWMINI_PROXY_PORT: String(port + 1), ANTHROPIC_API_KEY: '' }, // no reviewer billing
     stdio: ['pipe', 'pipe', 'ignore'],
   })
   let buf = ''; let nextId = 0
@@ -272,7 +280,7 @@ function brokerClient({ store, cwd, port }) {
 }
 
 async function brokerChecks() {
-  const PORT = 8791 // side port; the interactive broker's default is 8790
+  const PORT = 8795 // side port; the interactive broker holds 8790 (UI) and 8791 (egress proxy)
   const store = mkdtempSync(join(tmpdir(), 'clawmini-audit-store-'))
   const ws = mkdtempSync(join(tmpdir(), 'clawmini-audit-brokerws-'))
   const skip = (why) => {
