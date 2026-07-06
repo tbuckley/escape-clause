@@ -1,0 +1,11 @@
+# dependencies
+node_modules/
+
+# generated / runtime
+.claude/
+*.log
+*.pid
+out.log
+err.log
+
+# broker runtime state lives in ~/.clawmini-demo (outside the repo)
