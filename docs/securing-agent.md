@@ -6,13 +6,13 @@ OpenClaw's security has improved via sandboxes, malware scans, and human approva
 
 Modern models resist attacks better than you’d expect \-- for example, nobody ever cracked the [HackMyClaw challenge](https://hackmyclaw.com/). But when the downside is [deleting](https://alexeyondata.substack.com/p/how-i-dropped-our-production-database) [production data](https://x.com/lifeof_jer/status/2048103471019434248) or `rm -rf /`, hope is not a strategy.
 
-Is it possible to solve security for agents? I've been experimenting with another approach in my personal Claw tool, [Clawmini](http://github.com/tbuckley/clawmini). The takeaway: deny network access by default with your primary agent; and use a subagent for any task that requires network, with you as the firewall between them.
+Is it possible to solve security for agents? I've been experimenting with another approach in my personal Claw tool, [Escape Clause](http://github.com/tbuckley/escape-clause). The takeaway: deny network access by default with your primary agent; and use a subagent for any task that requires network, with you as the firewall between them.
 
 # Denying network by default
 
 A truly useful personal agent *must* combine private info and untrusted input (for example, reading your email). Therefore the only safe leg of the trifecta to remove is network access.
 
-Clawmini siloes its agents inside a restricted sandbox behind a network proxy. Agents can run shell commands, but anything touching the network fails. When it needs more, it can escalate to a human for approval to:
+Escape Clause siloes its agents inside a restricted sandbox behind a network proxy. Agents can run shell commands, but anything touching the network fails. When it needs more, it can escalate to a human for approval to:
 
 * Run a specific one-off command outside the sandbox (`run-host`)  
 * Permanently allowlist a specific domain (`allowlist-domain`)  
@@ -24,13 +24,13 @@ While it may appear limited at first, this occasional approval step is all it ta
 
 Let's start by applying this to Google Workspace. A personal assistant needs your email, calendar, and documents. CLIs exist for this: Google’s (unofficial?) [Workspace CLI](https://github.com/googleworkspace/cli) and the OpenClaw-linked [gog CLI](https://gogcli.sh/). But blanket access to your Google account is [dangerous](https://www.businessinsider.com/meta-ai-alignment-director-openclaw-email-deletion-2026-2).
 
-Clawmini's model establishes clear boundaries:
+Escape Clause's model establishes clear boundaries:
 
 * **Read-only:** auto-approved. Reading your calendar or emails can’t exfiltrate anything[^1].  
 * **Private writes:** auto-approved. Email drafts and private Google Docs stay private within my Workspace, which already has my personal data anyway[^2].  
 * **Destructive / Outbound actions:** human approval. A sent email or a calendar invite could exfiltrate data, so these are blocked by default.
 
-I had Clawmini build wrappers around the Workspace CLI: `google-workspace-readonly` for all `get`/`list`/`query`/`export` commands; `google-workspace-drafts` for an allowlist of private-write commands; and `google-workspace-full` for the raw `gws` CLI blocked on human approval. Skills instruct the agent to use the first two whenever possible, then fall back to the full policy only when necessary.
+I had Escape Clause build wrappers around the Workspace CLI: `google-workspace-readonly` for all `get`/`list`/`query`/`export` commands; `google-workspace-drafts` for an allowlist of private-write commands; and `google-workspace-full` for the raw `gws` CLI blocked on human approval. Skills instruct the agent to use the first two whenever possible, then fall back to the full policy only when necessary.
 
 # Siloed Subagents: The Web Development Problem
 
@@ -68,7 +68,7 @@ When a human must review a request, it should be explained in sufficient detail.
 
 # Next Steps
 
-Clawmini isn’t for everyone, but hopefully this exploration hints at how security can be solved by other tools. As I was writing this post, [OpenAI shipped Lockdown Mode](https://simonwillison.net/2026/Jun/5/openai-help-lockdown-mode/) for ChatGPT, blocking all outbound network traffic. While extreme, it’s a logical baseline to ensure security, and it can be relaxed over time through exactly the kind of human-in-the-loop policies that Clawmini uses.
+Escape Clause isn’t for everyone, but hopefully this exploration hints at how security can be solved by other tools. As I was writing this post, [OpenAI shipped Lockdown Mode](https://simonwillison.net/2026/Jun/5/openai-help-lockdown-mode/) for ChatGPT, blocking all outbound network traffic. While extreme, it’s a logical baseline to ensure security, and it can be relaxed over time through exactly the kind of human-in-the-loop policies that Escape Clause uses.
 
 A one-size-fits-all security model also won’t be sufficient. Different trade-offs are required for different services, like Google Workspace vs web development vs web browsing. I would feel comfortable developing apps with Codex/Claude apps today, assuming they were sandboxed from any personal data. But to go broader, we will need tools that can support each trade-off as well as patterns for them to safely communicate.
 

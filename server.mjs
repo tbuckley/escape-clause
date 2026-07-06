@@ -15,7 +15,7 @@ import { createServer } from 'node:http'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { uiPassword, createSession, checkSession, destroySession, listTickets, audit, DIR } from './store.mjs'
 
-const COOKIE = 'clawmini_session'
+const COOKIE = 'escape_clause_session'
 const SESSION_MAX_AGE_S = 30 * 24 * 3600
 
 // Constant-time string compare (hash both sides so length never leaks).
@@ -25,7 +25,7 @@ const safeEqual = (a, b) => {
 }
 
 function sessionOf(req) {
-  const m = /(?:^|;\s*)clawmini_session=([0-9a-f]{64})/.exec(req.headers.cookie || '')
+  const m = /(?:^|;\s*)escape_clause_session=([0-9a-f]{64})/.exec(req.headers.cookie || '')
   if (m && checkSession(m[1])) return m[1]
   const b = /^Bearer ([0-9a-f]{64})$/.exec(req.headers.authorization || '')
   if (b && checkSession(b[1])) return b[1]
@@ -127,7 +127,7 @@ function readBody(req) {
 // the password once at login. Without a session the page shows the login form.
 const PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Clawmini broker — approvals</title>
+<title>Escape Clause broker — approvals</title>
 <style>
   body{font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;background:#f4f5f7;color:#1b1e22}
   header{background:#16181c;color:#fff;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;gap:12px}
@@ -167,10 +167,10 @@ const PAGE = `<!doctype html>
   #loginerr{color:#b3261e;font-size:13px;margin-top:10px;min-height:1em}
 </style></head>
 <body>
-<header><h1>Clawmini broker — approval queue</h1><div id="authstate"></div></header>
+<header><h1>Escape Clause broker — approval queue</h1><div id="authstate"></div></header>
 <div id="login" hidden>
   <h2>Sign in to review requests</h2>
-  <p>The password is on the broker host in <code>~/.clawmini-demo/secrets/password</code>.
+  <p>The password is on the broker host in <code>~/.escape-clause/secrets/password</code>.
   After signing in, links to individual requests (like the one that brought you here) work directly.</p>
   <form onsubmit="return login(event)">
     <input type="password" id="pw" placeholder="password" autocomplete="current-password" autofocus>

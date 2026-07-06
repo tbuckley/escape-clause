@@ -1,4 +1,4 @@
-# Proposal: Clawmini's Security Model on top of the `claude` CLI
+# Proposal: Escape Clause's Security Model on top of the `claude` CLI
 
 Goal: run `claude` with **full autonomy inside a no-network sandbox**, and require
 **human approval (via a web UI) for anything that leaves the sandbox** — one-off host
@@ -63,7 +63,7 @@ bubblewrap + socat on Linux, with a host-side proxy enforcing a domain allowlist
     "allow": ["Bash", "Read", "Edit", "Write", "Glob", "Grep"],
     "deny": [
       "WebFetch", "WebSearch", "Monitor", "PowerShell",
-      "Read(~/.clawmini/**)", "Edit(~/.clawmini/**)", "Write(~/.clawmini/**)",
+      "Read(~/.escape-clause/**)", "Edit(~/.escape-clause/**)", "Write(~/.escape-clause/**)",
       "Edit(.claude/**)", "Write(.claude/**)",
       "Edit(CLAUDE.md)", "Write(CLAUDE.md)",
       "Edit(.mcp.json)", "Write(.mcp.json)"
@@ -77,8 +77,8 @@ bubblewrap + socat on Linux, with a host-side proxy enforcing a domain allowlist
     "excludedCommands": [],
     "network": { "allowedDomains": [] },
     "filesystem": {
-      "denyRead": ["~/.clawmini", "~/.ssh", "~/.aws", "~/.gnupg", "~/.config/gcloud"],
-      "denyWrite": ["~/.clawmini"]
+      "denyRead": ["~/.escape-clause", "~/.ssh", "~/.aws", "~/.gnupg", "~/.config/gcloud"],
+      "denyWrite": ["~/.escape-clause"]
     },
     "credentials": {
       "files": [
@@ -363,13 +363,13 @@ go through the broker as escalations like everything else.
 
 ## 2. Layer 2 — the escalation broker
 
-One daemon, written by you (this is ~all of Clawmini's custom code). It plays three
+One daemon, written by you (this is ~all of Escape Clause's custom code). It plays three
 roles: MCP server, policy engine, approval web UI.
 
 ### Registration
 
 ```bash
-claude mcp add escalation --scope project -- node /opt/clawmini/broker.js
+claude mcp add escalation --scope project -- node /opt/escape-clause/broker.js
 ```
 
 Stdio transport: claude spawns it on the host (unsandboxed), talks over pipes, no
@@ -406,13 +406,13 @@ the payload between your review and the run. Approve bytes, not references.
 ### The private store and file references
 
 The broker keeps all of its state in one directory the agent can never touch —
-`~/.clawmini/` in the config above, denied to both sandboxed Bash (`filesystem.denyRead`
+`~/.escape-clause/` in the config above, denied to both sandboxed Bash (`filesystem.denyRead`
 / `denyWrite`) **and** the Read/Edit/Write file tools (`permissions.deny` mirrors —
 required because file tools bypass the bash sandbox, and deny rules still apply in
 bypassPermissions):
 
 ```
-~/.clawmini/
+~/.escape-clause/
   policies/         # registered policy scripts — the executable copies live HERE,
                     #   never in the agent workspace; registration/update is itself
                     #   an escalation, and each version is pinned by hash
@@ -609,7 +609,7 @@ simpler:
   injected as stdin user messages (third-party channels can still feed in via
   `--channels`).
 - The broker keeps a **durable outbox with acks**. If the session dies or the machine
-  reboots, the supervisor restarts with `claude --continue --channels clawmini` and
+  reboots, the supervisor restarts with `claude --continue --channels escape-clause` and
   the broker re-delivers every unacknowledged event. Delivery is idempotent (event
   ids); each resolution is consumed exactly once. No `-p --resume` races, no
   session-id bookkeeping on tickets, no concurrent writers to one transcript.
@@ -675,7 +675,7 @@ ticket pattern; adopt it when it stabilizes in Claude Code.
 ## 4. Alternative shapes (worth knowing, not the recommendation)
 
 **A. Native permission flow instead of a broker for `run-host`.** Claude Code already
-has Clawmini's core loop built in: with sandbox auto-allow mode, sandboxed commands run
+has Escape Clause's core loop built in: with sandbox auto-allow mode, sandboxed commands run
 freely, and a command that *needs* network/host access falls back to a regular
 permission prompt. You could keep `allowUnsandboxedCommands: true`, stay in `default`
 mode with sandbox auto-allow, and route prompts to your web UI with a
@@ -687,7 +687,7 @@ bash command with no policy layering, no `check_policy` dry-run, no cooldowns, a
 10-minute hook ceiling; you'd rebuild the broker anyway. But it's an excellent **belt**
 under the broker's suspenders, and the right shape if you want minimal custom code.
 
-**B. Agent SDK instead of the CLI.** If Clawmini evolves into a product, build the loop
+**B. Agent SDK instead of the CLI.** If Escape Clause evolves into a product, build the loop
 with `@anthropic-ai/claude-agent-sdk`: the `canUseTool` callback is a plain async
 function — it can await your approval service's webhook for arbitrarily long, return
 `{behavior: "allow", updatedInput}` or `{behavior: "deny", message}`, and composes with
@@ -708,7 +708,7 @@ The broker is also the inter-agent firewall:
    ```bash
    claude -p "$MESSAGE" \
      --permission-mode bypassPermissions \
-     --settings /opt/clawmini/profiles/webdev.json
+     --settings /opt/escape-clause/profiles/webdev.json
    ```
    in `~/agents/webdev/` — a workspace containing **no personal data**, with its own
    settings: sandbox enabled but `allowedDomains` covering npm/GitHub/etc. (or

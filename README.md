@@ -1,8 +1,8 @@
-# Clawmini
+# Escape Clause
 
 **Run Claude Code in a locked-down sandbox — and give it a safe, human-approved way back out.**
 
-Clawmini lets an AI agent work autonomously inside a box with **no network and no host
+Escape Clause lets an AI agent work autonomously inside a box with **no network and no host
 access**, while anything it needs from the outside world (run a host command, fetch a
 URL) goes through a **broker**: the agent files a request, you review it in a web UI
 (with an AI-generated risk summary), and only what you approve actually runs. Approved
@@ -62,14 +62,14 @@ web chat UI); the broker handles requests, policies, review, and notifications.
 ### 1. Install the broker
 
 ```bash
-git clone https://github.com/tbuckley/claude-clawmini.git
-cd claude-clawmini
-./clawmini.sh install
+git clone https://github.com/tbuckley/escape-clause.git
+cd escape-clause
+./escape-clause.sh install
 ```
 
-This copies the broker to `~/.clawmini-demo/app` — deliberately **outside** any
+This copies the broker to `~/.escape-clause/app` — deliberately **outside** any
 directory the agent can write to — and prints the web UI password (stored at
-`~/.clawmini-demo/secrets/password`; overwrite that file to choose your own).
+`~/.escape-clause/secrets/password`; overwrite that file to choose your own).
 
 ### 2. Launch a sandboxed session
 
@@ -77,7 +77,7 @@ Pick (or create) a workspace directory — any directory that does **not** conta
 broker source. Run this in a tmux pane or a terminal you'll keep open:
 
 ```bash
-~/.clawmini-demo/app/clawmini.sh launch ~/clawmini-workspace
+~/.escape-clause/app/escape-clause.sh launch ~/escape-clause-workspace
 ```
 
 On first launch, claude asks you to trust the workspace — accept. A startup line
@@ -94,13 +94,13 @@ confirms the broker channel is live: `Channels: server:broker`.
 
 In fakechat, send:
 
-> Please run the host command: echo hello-from-clawmini — show me the output.
+> Please run the host command: echo hello-from-escape-clause — show me the output.
 
 The agent can't run that itself (sandboxed), so it files a broker request and keeps
 going. Watch the ticket appear live in the approval UI: the exact argv, the AI risk
 summary, and the agent's justification. Click **Approve once** — the broker runs the
 approved snapshot on the host, pushes the outcome into the session, and the agent posts
-`hello-from-clawmini` back into fakechat. **Deny** (with an optional message) feeds
+`hello-from-escape-clause` back into fakechat. **Deny** (with an optional message) feeds
 your text back to the agent instead.
 
 Then try the policy engine:
@@ -108,7 +108,7 @@ Then try the policy engine:
 > What's the host's uptime?
 
 The agent calls the seeded `host-info` policy — class `readonly` — so it auto-runs with
-no ticket and no human (still audit-logged to `~/.clawmini-demo/audit.log`). Whereas:
+no ticket and no human (still audit-logged to `~/.escape-clause/audit.log`). Whereas:
 
 > Fetch https://example.com and summarize it.
 
@@ -135,12 +135,12 @@ it after every `claude` upgrade, since upgrades can change sandbox behavior.
 |---|---|
 | `broker.mjs` | MCP server + channel push + ticket lifecycle + permission relay |
 | `server.mjs` | Approval web UI: password login, live queue (SSE), approve/deny |
-| `store.mjs` | Durable state under `~/.clawmini-demo` (tickets, policies, password, `audit.log`) |
+| `store.mjs` | Durable state under `~/.escape-clause` (tickets, policies, password, `audit.log`) |
 | `policies.mjs` | Named scripts, hash-pinned, invoked as `execve` (never a shell) |
 | `proxy.mjs` | Deny-all egress proxy the sandbox routes through |
 | `reviewer.mjs` | AI risk summaries — one Haiku call per ticket, advisory only |
 | `guard.mjs` | Fail-closed `PreToolUse` hook denying file tools on protected paths |
-| `clawmini.sh` | `install` / `launch` / `stamp` |
+| `escape-clause.sh` | `install` / `launch` / `stamp` |
 | `templates/CLAUDE.md` | Rules-of-the-box instructions stamped into new workspaces |
 | `docs/` | Design docs and proposals |
 | `tests/` | The adversarial sandbox audit |
@@ -149,7 +149,7 @@ it after every `claude` upgrade, since upgrades can change sandbox behavior.
 
 ### The launcher
 
-`clawmini.sh launch <workspace>` does two things:
+`escape-clause.sh launch <workspace>` does two things:
 
 1. **(Re)stamps the workspace config** — `.claude/settings.json`,
    `.claude/settings.local.json`, `.mcp.json` — from the protected install, and drops a
@@ -166,7 +166,7 @@ it after every `claude` upgrade, since upgrades can change sandbox behavior.
   server to a channel so it can push notifications (custom channels need this flag
   during the research preview). The broker itself loads from the stamped `.mcp.json`
   (`enableAllProjectMcpServers` + the pre-trust in the stamped `settings.local.json`) —
-  and its command path points into `~/.clawmini-demo/app`, not the workspace.
+  and its command path points into `~/.escape-clause/app`, not the workspace.
 
 The launcher refuses to run from the broker source tree or from inside the protected
 store — the whole point is keeping broker code out of the agent's reach.
@@ -193,7 +193,7 @@ When the agent files a ticket it gets back a credential-free `url` (e.g.
 fakechat gets a link straight to that request, which the UI scrolls to and highlights.
 On a device that hasn't signed in yet, the link lands on the login form first — enter
 the password once and the request is right there. If the UI is reachable off-box
-(Tailscale, a tunnel, a domain), set **`CLAWMINI_UI_URL`** when you launch so shared
+(Tailscale, a tunnel, a domain), set **`ESCAPE_CLAUSE_UI_URL`** when you launch so shared
 links resolve for the remote user; it defaults to `http://127.0.0.1:<port>`. The shared
 URL is deliberately credential-free — the sandboxed agent never receives the password or
 a session, only a pointer to the request.
@@ -208,11 +208,11 @@ in the same 8790 queue as a `permission` item (with an AI risk summary). Approve
 there emits the verdict back to Claude Code. The terminal dialog stays open in parallel;
 whichever answers first wins, so this is a second way to answer, not an auto-deny.
 
-Set the mode at launch time with `CLAWMINI_RELAY` (the launcher stamps it into the
+Set the mode at launch time with `ESCAPE_CLAUSE_RELAY` (the launcher stamps it into the
 workspace `.mcp.json` env):
 
 ```bash
-CLAWMINI_RELAY=forward ~/.clawmini-demo/app/clawmini.sh launch ~/clawmini-workspace
+ESCAPE_CLAUSE_RELAY=forward ~/.escape-clause/app/escape-clause.sh launch ~/escape-clause-workspace
 ```
 
 | Mode | Behavior |
@@ -242,7 +242,7 @@ those prompts is the deny-all proxy's job, below.
 To make network egress fail closed with **no prompt at all**, the broker replaces the
 built-in sandbox proxy entirely: `proxy.mjs` is a deny-all HTTP proxy on
 `127.0.0.1:8791` plus a deny-all SOCKS5 listener on `8792` for the non-HTTP protocols
-the sandbox routes over SOCKS (git-ssh, ftp, grpc, rsync). `CLAWMINI_PROXY_PORT` moves
+the sandbox routes over SOCKS (git-ssh, ftp, grpc, rsync). `ESCAPE_CLAUSE_PROXY_PORT` moves
 the pair; SOCKS is always HTTP+1. The stamped `.claude/settings.json` points the sandbox
 at both:
 
@@ -282,14 +282,14 @@ Why the **approve path** is out of the agent's reach — three independent layer
    an agent-invokable interface to a ticket-state transition. Resolution exists only on
    the web UI's authenticated endpoints.
 3. Approve/deny require a **login session**: the password lives in
-   `~/.clawmini-demo/secrets/password` (denyRead- and guard-protected), and the session
+   `~/.escape-clause/secrets/password` (denyRead- and guard-protected), and the session
    rides in an HttpOnly `SameSite=Lax` cookie the page's JS can't read. Every API route
    (reads included) is session-gated; five wrong passwords locks login for 30 seconds;
    logins and failures land in `audit.log`.
 
 And why the **broker itself** is out of the agent's reach:
 
-4. The broker's code runs from `~/.clawmini-demo/app` — inside the same denyRead- and
+4. The broker's code runs from `~/.escape-clause/app` — inside the same denyRead- and
    guard-protected dir as its state — never from the agent's writable workspace. (An
    earlier version kept it in the workspace; the agent could then rewrite the very code
    that executes approvals, and its edits would run with full host privileges at the

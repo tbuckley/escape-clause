@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Clawmini broker — PURE PLUGIN version, with a real approval surface.
+// Escape Clause broker — PURE PLUGIN version, with a real approval surface.
 //
 // claude runs NORMALLY (interactive, e.g. in tmux). The broker is one stdio process
 // playing four roles:
@@ -14,7 +14,7 @@
 //     (sandbox.network.httpProxyPort/socksProxyPort), so off-allowlist network fails
 //     closed instantly with no SandboxNetworkAccess prompt; the broker is the only exit
 //
-// State is durable JSON under ~/.clawmini-demo (store.mjs), which the sandbox + guard
+// State is durable JSON under ~/.escape-clause (store.mjs), which the sandbox + guard
 // hook deny to the agent. Tickets snapshot the exact argv/script at request time; the
 // approved bytes are what run.
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
@@ -30,16 +30,16 @@ import { review } from './reviewer.mjs'
 import { startServer } from './server.mjs'
 import { startProxy } from './proxy.mjs'
 
-const PORT = Number(process.env.CLAWMINI_UI_PORT || 8790)
+const PORT = Number(process.env.ESCAPE_CLAUSE_UI_PORT || 8790)
 // Base URL the USER reaches the review UI at — override when the UI is behind a tunnel /
 // reverse proxy (Tailscale, ngrok, a domain) so the link the agent shares is reachable.
 // Deliberately TOKEN-FREE: this is the one URL the sandboxed agent is allowed to know and
 // relay to a user; it must never carry the approval token (the token gates approve/deny).
-const UI_URL = (process.env.CLAWMINI_UI_URL || `http://127.0.0.1:${PORT}`).replace(/\/+$/, '')
+const UI_URL = (process.env.ESCAPE_CLAUSE_UI_URL || `http://127.0.0.1:${PORT}`).replace(/\/+$/, '')
 const ticketUrl = (id) => `${UI_URL}/?req=${encodeURIComponent(id)}`
 const log = (m) => { const s = `[${new Date().toISOString().slice(11, 19)}] ${m}\n`; appendFileSync(join(DIR, 'broker.log'), s); process.stderr.write(s) }
 
-// How the broker handles a permission prompt Claude Code relays to it (CLAWMINI_RELAY):
+// How the broker handles a permission prompt Claude Code relays to it (ESCAPE_CLAUSE_RELAY):
 //   forward (default) — surface it in the UI queue and wait for a human verdict
 //   deny              — auto-deny it immediately, no human, no UI ticket (just audit-logged).
 //                       Use this when settings.json already auto-allows everything legitimate:
@@ -50,8 +50,8 @@ const log = (m) => { const s = `[${new Date().toISOString().slice(11, 19)}] ${m}
 // domain) prompt is NOT relayed — it never reaches the broker in any mode. Domain prompts
 // are instead eliminated at the source by the deny-all egress proxy (proxy.mjs), which
 // replaces the built-in sandbox proxy that generates them.
-const RELAY = ['forward', 'deny', 'off'].includes((process.env.CLAWMINI_RELAY || '').toLowerCase())
-  ? process.env.CLAWMINI_RELAY.toLowerCase() : 'forward'
+const RELAY = ['forward', 'deny', 'off'].includes((process.env.ESCAPE_CLAUSE_RELAY || '').toLowerCase())
+  ? process.env.ESCAPE_CLAUSE_RELAY.toLowerCase() : 'forward'
 
 seedPolicies()
 
@@ -347,7 +347,7 @@ mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
 })
 
 const ui = startServer({ port: PORT, baseUrl: UI_URL, resolveTicket, log })
-const PROXY_PORT = Number(process.env.CLAWMINI_PROXY_PORT || 8791)
+const PROXY_PORT = Number(process.env.ESCAPE_CLAUSE_PROXY_PORT || 8791)
 startProxy({ port: PROXY_PORT, socksPort: PROXY_PORT + 1, log, audit })
 await mcp.connect(new StdioServerTransport())
 log(`broker up (stdio MCP + channel, relay=${RELAY}). store: ${DIR}`)

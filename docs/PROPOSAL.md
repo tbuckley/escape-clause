@@ -25,10 +25,10 @@ from inside the sandbox fails instantly and leaks nothing).
 Everything below needs tickets that survive a broker restart. Today `pending` is an
 in-memory `Map` and the counter resets to 0 every launch (so `REQ-1` is reused —
 ambiguous audit trail). Move state into the private store the sandbox already protects
-(`~/.clawmini-demo`, covered by `denyRead` + the guard hook):
+(`~/.escape-clause`, covered by `denyRead` + the guard hook):
 
 ```
-~/.clawmini-demo/
+~/.escape-clause/
   tickets/REQ-<n>.json   # one file per ticket: argv/policy+args snapshot, reason,
                          #   status, created/resolved timestamps, decision, output,
                          #   reviewer summary (when ready)
@@ -76,7 +76,7 @@ server-sent events for live updates, in keeping with the example's size.
   the MCP surface has **no resolve tool** — tools can create and read tickets, never
   transition them, so there is no code path from an agent-invokable interface to an
   approval; and the API requires a login session minted from the password in
-  `~/.clawmini-demo/secrets/password`, which is denyRead- and guard-protected.
+  `~/.escape-clause/secrets/password`, which is denyRead- and guard-protected.
 - *Only the user can resolve tickets.* Bind `127.0.0.1` explicitly (never `0.0.0.0`).
   Approvals are `POST` only, carry an HttpOnly `SameSite=Lax` session cookie, and the
   button lives on the page that renders the full payload — there is no approve-by-link
@@ -116,7 +116,7 @@ executable + a manifest declaring its class:
   What a script does with its args is a registration-review concern; the reviewer flags
   `eval`, backticks, and string-built shell inside submitted scripts.
 - **Hash pinning is what makes registration review meaningful.** The executable copy
-  lives only in `~/.clawmini-demo/policies/` — a path the agent cannot read or write.
+  lives only in `~/.escape-clause/policies/` — a path the agent cannot read or write.
   The agent can rewrite its workspace copy of a script all day; the approved bytes run.
   An *update* re-enters review with an old→new diff, which is the alert-fatigue win:
   the human reviews script changes, not script runs.

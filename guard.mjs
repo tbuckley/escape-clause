@@ -39,13 +39,13 @@ function realish(p) {
 let input = {}
 try { input = JSON.parse(readFileSync(0, 'utf8')) } catch {}
 
-// ~/.clawmini-demo covers the broker's state AND its installed code (~/.clawmini-demo/app)
+// ~/.escape-clause covers the broker's state AND its installed code (~/.escape-clause/app)
 // — the agent must not be able to modify the server that executes approvals. The
 // workspace's own launch config (.claude/, .mcp.json) is protected too: editing it is how
 // an agent would swap in its own broker or drop the sandbox on the NEXT launch. (The
 // launcher also re-stamps that config from the protected store every launch.)
 const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd || ''
-const PROTECTED = ['.ssh', '.aws', '.gnupg', '.config/gcloud', '.clawmini-demo']
+const PROTECTED = ['.ssh', '.aws', '.gnupg', '.config/gcloud', '.escape-clause']
   .map((p) => join(homedir(), p))
   .concat(projectDir ? [join(projectDir, '.claude'), join(projectDir, '.mcp.json')] : [])
   .map(realish)

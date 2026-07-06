@@ -1,5 +1,5 @@
 // Durable broker state, all under one private dir the agent can never touch
-// (~/.clawmini-demo — covered by sandbox denyRead AND the guard hook). Tickets are
+// (~/.escape-clause — covered by sandbox denyRead AND the guard hook). Tickets are
 // one JSON file each: the file IS the request-time snapshot, so what the human
 // approves is what runs (TOCTOU closed for argv-style requests).
 import { mkdirSync, readFileSync, writeFileSync, readdirSync, appendFileSync, existsSync } from 'node:fs'
@@ -7,7 +7,7 @@ import { randomBytes, createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-export const DIR = process.env.CLAWMINI_DIR || join(homedir(), '.clawmini-demo')
+export const DIR = process.env.ESCAPE_CLAUSE_DIR || join(homedir(), '.escape-clause')
 const TICKETS = join(DIR, 'tickets')
 const SECRETS = join(DIR, 'secrets')
 const CACHE = join(DIR, 'reviewer-cache')

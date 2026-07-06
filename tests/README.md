@@ -3,7 +3,7 @@
 `sandbox-audit.mjs` is an adversarial test that checks the sandbox configuration the
 plugin stamps into workspaces is actually sound — it does not trust the agent's
 self-report, it ground-truths every result against decoy files it controls. Run
-`./clawmini.sh install` first (the behavioral parts launch from stamped workspaces whose
+`./escape-clause.sh install` first (the behavioral parts launch from stamped workspaces whose
 guard hook loads from the install, fail-closed). Re-run it on every `claude` / Agent SDK
 upgrade, since those can change sandbox behavior.
 
@@ -30,7 +30,7 @@ temp dir, so even a total sandbox failure can't touch real files.
 - **control write succeeds** — a workspace write *does* work (proves blocks are selective,
   not a broken-sandbox false pass).
 
-**B. Config drift** — stamps a fresh workspace with `clawmini.sh stamp` and confirms it
+**B. Config drift** — stamps a fresh workspace with `escape-clause.sh stamp` and confirms it
 carries the sound config: sandbox enabled with no allowed domains, WebFetch/WebSearch
 denied, `allowUnsandboxedCommands: false`, `denyRead` for crown-jewel paths, the guard
 hook wired `*`/fail-closed from the protected install and covering the workspace launch
@@ -56,7 +56,7 @@ appears, the hook let a symlink past a literal-string check (it must `realpath` 
 **E–G. Broker surface** — the plugin broker now carries real authority (web-UI ticket
 resolution, a policy engine with auto-approve classes), so its invariants get the same
 prove-by-doing treatment: the audit spawns a live broker with an isolated store
-(`CLAWMINI_DIR`) on a side port and speaks MCP to it directly.
+(`ESCAPE_CLAUSE_DIR`) on a side port and speaks MCP to it directly.
 
 - **E. Approval surface out of the agent's reach** — the MCP tool list contains no
   resolve/approve tool (resolution is web-UI-only by construction); every API route
@@ -105,4 +105,4 @@ probe wasn't actually gated). Both are reminders to ground-truth on stable, real
   if the sandbox can't initialize the run errors rather than silently passing unsandboxed.
 - Parts A–D test *sandbox* soundness; Parts E–G test the broker's own authority
   boundaries. The end-to-end chat → ticket → web-UI approve → channel-notification loop
-  is still exercised interactively via a real `clawmini.sh launch` session.
+  is still exercised interactively via a real `escape-clause.sh launch` session.
