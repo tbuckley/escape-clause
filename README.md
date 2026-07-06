@@ -21,6 +21,12 @@ The whole thing is a small, readable Node.js codebase — no framework, two depe
 built as an exploration of how far you can take agent containment with Claude Code's
 own primitives: sandbox settings, hooks, MCP servers, and channels.
 
+A guiding principle: **no magic**. Everything Escape Clause does should be inspectable
+and understandable. `init` writes plain JSON config files you can read; `launch` runs a
+`claude` command it prints so you can run it yourself; nothing is rewritten behind your
+back — when the config doesn't match what `init` would write, launch refuses and tells
+you why instead of silently fixing it.
+
 ## What's in the box
 
 - **A hardened sandbox** — network fully denied (all egress routed to a deny-all proxy,
@@ -37,8 +43,10 @@ own primitives: sandbox settings, hooks, MCP servers, and channels.
   routine read-only things (like "what's the host's uptime?") run instantly with no
   human, while anything with egress or write risk always gets a ticket.
 - **Tamper resistance** — the broker installs *outside* the agent's workspace, a
-  fail-closed hook blocks file tools from touching protected paths, and the workspace
-  config is re-stamped from the protected install on every launch.
+  fail-closed hook blocks file tools from touching protected paths, the sandbox
+  deny-writes the workspace's own launch config (so bash can't rewrite it either),
+  and every launch verifies the config still matches the protected install — drift
+  refuses to launch.
 - **An adversarial audit** (`tests/sandbox-audit.mjs`) that ground-truths all of the
   above by actually trying to escape.
 
@@ -71,26 +79,49 @@ This copies the broker to `~/.escape-clause/app` — deliberately **outside** an
 directory the agent can write to — and prints the web UI password (stored at
 `~/.escape-clause/secrets/password`; overwrite that file to choose your own).
 
-### 2. Launch a sandboxed session
+### 2. Initialize a workspace
 
 Pick (or create) a workspace directory — any directory that does **not** contain the
-broker source. Run this in a tmux pane or a terminal you'll keep open:
+broker source — and stamp it with the sandbox config:
+
+```bash
+~/.escape-clause/app/escape-clause.sh init ~/escape-clause-workspace
+```
+
+This writes three plain-JSON files from the protected install — `.claude/settings.json`
+(sandbox + permissions + guard hook), `.claude/settings.local.json` (pre-trusts the
+broker), `.mcp.json` (the broker server) — and drops a `CLAUDE.md` if the workspace has
+none. Read them; that's the whole configuration. Re-run `init` any time to re-stamp.
+
+### 3. Launch a sandboxed session
+
+Run this in a tmux pane or a terminal you'll keep open:
 
 ```bash
 ~/.escape-clause/app/escape-clause.sh launch ~/escape-clause-workspace
 ```
 
+`launch` verifies the workspace config still matches what `init` would write (refusing
+with an explanation if it drifted), then runs `claude` in the workspace — it prints the
+exact command, which you can run yourself instead:
+
+```bash
+cd ~/escape-clause-workspace
+claude --channels plugin:fakechat@claude-plugins-official \
+    --dangerously-load-development-channels server:broker
+```
+
 On first launch, claude asks you to trust the workspace — accept. A startup line
 confirms the broker channel is live: `Channels: server:broker`.
 
-### 3. Open the two UIs
+### 4. Open the two UIs
 
 | URL | What it is |
 |---|---|
 | http://localhost:8787 | **fakechat** — chat with the agent |
 | http://127.0.0.1:8790 | **approval UI** — sign in with the password from step 1 |
 
-### 4. Try it
+### 5. Try it
 
 In fakechat, send:
 
@@ -117,7 +148,7 @@ exfiltration — so every run is a ticket showing the exact URL. Finally, ask th
 *register* a new policy for something recurring: the proposed script itself arrives as a
 ticket, with its full source (and a diff, if it updates an existing policy) for review.
 
-### 5. Verify the sandbox (recommended)
+### 6. Verify the sandbox (recommended)
 
 ```bash
 cd tests
@@ -157,7 +188,7 @@ now binds cleanly. Messages sent before the reconnect are lost; resend them.
 | `proxy.mjs` | Deny-all egress proxy the sandbox routes through |
 | `reviewer.mjs` | AI risk summaries — one Haiku call per ticket, advisory only |
 | `guard.mjs` | Fail-closed `PreToolUse` hook denying file tools on protected paths |
-| `escape-clause.sh` | `install` / `launch` / `stamp` |
+| `escape-clause.sh` | `install` / `init` / `launch` |
 | `templates/CLAUDE.md` | Rules-of-the-box instructions stamped into new workspaces |
 | `docs/` | Design docs and proposals |
 | `tests/` | The adversarial sandbox audit |
@@ -166,15 +197,21 @@ now binds cleanly. Messages sent before the reconnect are lost; resend them.
 
 ### The launcher
 
-`escape-clause.sh launch <workspace>` does two things:
+Two commands with one job each:
 
-1. **(Re)stamps the workspace config** — `.claude/settings.json`,
-   `.claude/settings.local.json`, `.mcp.json` — from the protected install, and drops a
-   `CLAUDE.md` if the workspace has none. Stamping on *every* launch means a config the
-   agent tampered with mid-session (file tools are guard-blocked, but sandboxed bash can
-   still write inside its own workspace) is never what actually launches.
-2. Execs `claude --channels plugin:fakechat@claude-plugins-official
-   --dangerously-load-development-channels server:broker`.
+1. **`escape-clause.sh init <workspace>` stamps the workspace config** —
+   `.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json` — from the
+   protected install, and drops a `CLAUDE.md` if the workspace has none.
+2. **`escape-clause.sh launch <workspace>` runs claude** — it prints and execs
+   `claude --channels plugin:fakechat@claude-plugins-official
+   --dangerously-load-development-channels server:broker` in the workspace. First,
+   though, it verifies the stamped config is byte-identical to what `init` would write
+   right now; if not — a stale init, changed `ESCAPE_CLAUSE_*` env, or tampering — it
+   refuses and tells you to inspect and re-run `init`. Tampering from inside the box
+   shouldn't be possible at all (file tools are guard-blocked and sandboxed bash is
+   denyWrite-blocked on the config paths), so the verify is a backstop, not the
+   defense. A tampered config is never what actually launches, and nothing is
+   rewritten behind your back.
 
 - `--channels plugin:fakechat@...` — the chat surface. fakechat is a plugin channel: it
   ships its own MCP server that serves the web UI on `localhost:8787` and delivers the
@@ -185,8 +222,8 @@ now binds cleanly. Messages sent before the reconnect are lost; resend them.
   (`enableAllProjectMcpServers` + the pre-trust in the stamped `settings.local.json`) —
   and its command path points into `~/.escape-clause/app`, not the workspace.
 
-The launcher refuses to run from the broker source tree or from inside the protected
-store — the whole point is keeping broker code out of the agent's reach.
+Both commands refuse the broker source tree and the protected store as workspaces —
+the whole point is keeping broker code out of the agent's reach.
 
 The stamped sandbox config lands at `<workspace>/.claude/settings.json` so it
 auto-loads — no `--settings` flag needed. You can confirm the sandbox is live by asking
@@ -210,8 +247,8 @@ When the agent files a ticket it gets back a credential-free `url` (e.g.
 fakechat gets a link straight to that request, which the UI scrolls to and highlights.
 On a device that hasn't signed in yet, the link lands on the login form first — enter
 the password once and the request is right there. If the UI is reachable off-box
-(Tailscale, a tunnel, a domain), set **`ESCAPE_CLAUSE_UI_URL`** when you launch so shared
-links resolve for the remote user; it defaults to `http://127.0.0.1:<port>`. The shared
+(Tailscale, a tunnel, a domain), set **`ESCAPE_CLAUSE_UI_URL`** when you run `init` so
+shared links resolve for the remote user; it defaults to `http://127.0.0.1:<port>`. The shared
 URL is deliberately credential-free — the sandboxed agent never receives the password or
 a session, only a pointer to the request.
 
@@ -225,11 +262,14 @@ in the same 8790 queue as a `permission` item (with an AI risk summary). Approve
 there emits the verdict back to Claude Code. The terminal dialog stays open in parallel;
 whichever answers first wins, so this is a second way to answer, not an auto-deny.
 
-Set the mode at launch time with `ESCAPE_CLAUSE_RELAY` (the launcher stamps it into the
-workspace `.mcp.json` env):
+Set the mode with `ESCAPE_CLAUSE_RELAY` when you run `init` — it's stamped into the
+workspace `.mcp.json` env. Keep it set for `launch` too, since launch verifies the
+config against the current environment:
 
 ```bash
-ESCAPE_CLAUSE_RELAY=forward ~/.escape-clause/app/escape-clause.sh launch ~/escape-clause-workspace
+export ESCAPE_CLAUSE_RELAY=forward
+~/.escape-clause/app/escape-clause.sh init ~/escape-clause-workspace
+~/.escape-clause/app/escape-clause.sh launch ~/escape-clause-workspace
 ```
 
 | Mode | Behavior |
@@ -311,9 +351,12 @@ And why the **broker itself** is out of the agent's reach:
    earlier version kept it in the workspace; the agent could then rewrite the very code
    that executes approvals, and its edits would run with full host privileges at the
    next launch.)
-5. The workspace launch config (`.claude/`, `.mcp.json`) is guard-protected against
-   file tools **and** re-stamped from the protected install on every launch, so
-   pointing `.mcp.json` at a different broker or dropping the sandbox doesn't survive.
+5. The workspace launch config (`.claude/`, `.mcp.json`) is protected three ways:
+   guard-blocked against file tools, `sandbox.filesystem.denyWrite`-blocked against
+   sandboxed bash (OS-enforced; the audit's Part C tamper-probes it), **and** verified
+   byte-for-byte against the protected install on every launch — drift refuses to
+   launch. Pointing `.mcp.json` at a different broker or dropping the sandbox doesn't
+   survive to a next session.
 6. The guard hook is loaded from the protected install and **fails closed**
    (`node …/guard.mjs || exit 2`): a missing or crashing guard blocks tool calls
    instead of waving them through.

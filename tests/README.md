@@ -30,16 +30,19 @@ temp dir, so even a total sandbox failure can't touch real files.
 - **control write succeeds** — a workspace write *does* work (proves blocks are selective,
   not a broken-sandbox false pass).
 
-**B. Config drift** — stamps a fresh workspace with `escape-clause.sh stamp` and confirms it
+**B. Config drift** — stamps a fresh workspace with `escape-clause.sh init` and confirms it
 carries the sound config: sandbox enabled with no allowed domains, WebFetch/WebSearch
-denied, `allowUnsandboxedCommands: false`, `denyRead` for crown-jewel paths, the guard
+denied, `allowUnsandboxedCommands: false`, `denyRead` for crown-jewel paths, `denyWrite`
+for the workspace's own launch config (bash-proof, not just file-tool-proof), the guard
 hook wired `*`/fail-closed from the protected install and covering the workspace launch
 config, non-broker MCP tools denied, and no workspace config checked into the source
 tree.
 
-**C. Launch load + autonomy** — runs `claude -p` from a freshly stamped workspace the
-documented way (no `--settings`) and confirms two things: the sandbox actually engages, and sandboxed bash
-**auto-runs unattended**. A sound config is worthless if the launch doesn't load it — the bug
+**C. Launch load + autonomy + config tamper** — runs `claude -p` from a freshly stamped
+workspace the documented way (no `--settings`) and confirms three things: the sandbox
+actually engages, sandboxed bash **auto-runs unattended**, and bash **cannot rewrite the
+workspace launch config** (`denyWrite` behavioral — ground truth is the files' bytes
+before/after a real tamper attempt, since the guard hook only covers file tools). A sound config is worthless if the launch doesn't load it — the bug
 this caught: the config was in a plain `settings.json` that Claude Code never auto-loads (it
 reads `.claude/settings.json`), so the whole sandbox was silently inactive. The autonomy
 check guards a subtler drift: the field is `autoAllowBashIfSandboxed` (the schema has no

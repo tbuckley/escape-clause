@@ -42,8 +42,9 @@ try { input = JSON.parse(readFileSync(0, 'utf8')) } catch {}
 // ~/.escape-clause covers the broker's state AND its installed code (~/.escape-clause/app)
 // — the agent must not be able to modify the server that executes approvals. The
 // workspace's own launch config (.claude/, .mcp.json) is protected too: editing it is how
-// an agent would swap in its own broker or drop the sandbox on the NEXT launch. (The
-// launcher also re-stamps that config from the protected store every launch.)
+// an agent would swap in its own broker or drop the sandbox on the NEXT launch. (Sandboxed
+// bash is covered separately by sandbox.filesystem.denyWrite on the same paths, and
+// `launch` refuses to run a config that no longer matches what `init` writes.)
 const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd || ''
 const PROTECTED = ['.ssh', '.aws', '.gnupg', '.config/gcloud', '.escape-clause']
   .map((p) => join(homedir(), p))
