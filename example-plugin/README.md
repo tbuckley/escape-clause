@@ -71,6 +71,7 @@ you (fakechat UI) ──▶ agent (interactive claude, sandboxed: no network/hos
   complication only exists in the SDK in-process variant).
 - `.mcp.json` / `settings.json` — register + pre-trust the broker; sandbox on with network
   denied, so the agent *must* use the broker to leave the box.
+- `guard.mjs` — `PreToolUse` hook: one global choke point denying file tools on protected paths.
 - `CLAUDE.md` — tells the agent the rules of the box.
 - `approve` / `deny` — one-line human decision helpers (no web UI).
 
@@ -95,14 +96,15 @@ UI. This is just the request → async approve/reject → notify loop as a plugi
 
 The sandbox is hardened (network denied, escape hatch closed via
 `allowUnsandboxedCommands: false`, `denyRead` on crown-jewel paths). Because the plugin
-variant has no `canUseTool` backstop, containment rests entirely on the settings, so two
-extra layers are in `permissions.deny`:
-- **`Read()/Edit()/Write()` deny rules** for crown-jewel paths and `~/.clawmini-demo` — the
-  native file tools bypass `sandbox.filesystem.denyRead` (which only covers bash), so they
-  need permission rules too. (Deny beats allow, so these win over the broad `allow` list.)
-- **`mcp__claude_ai_Gmail/Google_Calendar/Google_Drive`** denied — MCP servers run outside
-  the sandbox, so any connected integration is a network + private-data path. If you've
-  connected other MCP servers, deny those too, or launch with `--strict-mcp-config` so only
-  the broker is loaded. Check what's live with `/mcp` inside the session.
+variant has no `canUseTool` backstop, containment rests entirely on the settings:
+- **`guard.mjs` (a `PreToolUse` hook)** blocks the native file tools on protected paths.
+  These tools bypass `sandbox.filesystem.denyRead` (which only covers bash), and per-tool
+  deny rules are leaky — you'd need `Read()`, `Edit()`, `Write()`, `Grep()`, `Glob()`, …
+  and any future tool. One hook is the global choke point: it runs before every tool call,
+  checks the path, and denies — the settings equivalent of the driver's `canUseTool`.
+- **`mcp__claude_ai_Gmail/Google_Calendar/Google_Drive`** denied in `permissions.deny` — MCP
+  servers run outside the sandbox, so any connected integration is a network + private-data
+  path. If you've connected other MCP servers, deny those too, or launch with
+  `--strict-mcp-config` so only the broker is loaded. Check what's live with `/mcp`.
 
 Verify all of it with `../tests/sandbox-audit.mjs`.

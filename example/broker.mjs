@@ -116,9 +116,11 @@ for await (const m of query({
     },
     canUseTool: async (toolName, input) => {
       if (toolName === 'SandboxNetworkAccess') { log(`DENY SandboxNetworkAccess host=${input?.host}`); return { behavior: 'deny', message: 'Outside-VM denied. Use broker request_action.' } }
-      // native file tools bypass the bash sandbox — enforce protected paths here too
-      if (['Read', 'Edit', 'Write', 'NotebookEdit'].includes(toolName) && isProtected(String(input?.file_path || input?.notebook_path || ''))) {
-        log(`DENY ${toolName} on protected path`); return { behavior: 'deny', message: 'Protected path — not accessible to file tools.' }
+      // native file tools bypass the bash sandbox — deny any tool touching a protected path
+      // (path-based, not a fixed tool list, so Read/Edit/Write/Grep/Glob/NotebookEdit/future all covered)
+      if (toolName !== 'Bash') {
+        const fp = String(input?.file_path || input?.notebook_path || input?.path || '')
+        if (fp && isProtected(fp)) { log(`DENY ${toolName} on protected path ${fp}`); return { behavior: 'deny', message: 'Protected path — not accessible to file tools.' } }
       }
       // MCP servers run OUTSIDE the sandbox. Allow only the broker (+ fakechat chat); deny any
       // other MCP tool (e.g. mcp__claude_ai_Gmail/Drive/Calendar — network + private data).
