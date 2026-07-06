@@ -1,0 +1,9 @@
+{
+  "enableAllProjectMcpServers": true,
+  "permissions": {
+    "defaultMode": "default",
+    "allow": ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "mcp__broker__request_action"],
+    "deny": ["WebFetch", "WebSearch"]
+  },
+  "sandbox": { "enabled": true, "failIfUnavailable": true, "autoApprove": true, "network": { "allowedDomains": [] } }
+}

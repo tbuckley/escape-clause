@@ -1,0 +1,2 @@
+#!/bin/sh
+touch "$HOME/.clawmini-demo/verdicts/$1.deny" && echo "rejected $1"
