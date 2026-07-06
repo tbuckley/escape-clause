@@ -26,7 +26,7 @@ export function startServer({ port, resolveTicket, log }) {
         res.write('data: hello\n\n')
         sseClients.add(res)
         req.on('close', () => sseClients.delete(res))
-      } else if (req.method === 'POST' && /^\/api\/tickets\/REQ-\d+\/(approve|deny)$/.test(path)) {
+      } else if (req.method === 'POST' && /^\/api\/tickets\/(REQ-\d+|PERM-[a-km-z]{5})\/(approve|deny)$/.test(path)) {
         if (req.headers.authorization !== `Bearer ${token}`) {
           res.writeHead(401, { 'content-type': 'text/plain' }).end('missing or bad token')
           return
@@ -114,6 +114,12 @@ function age(iso){var s=Math.max(0,(Date.now()-Date.parse(iso))/1000)
 
 function facts(t){
   var h=''
+  if(t.kind==='permission'){
+    h+='<div class="lbl">Claude Code permission request — '+esc(t.tool_name)+' (relayed from the terminal)</div>'
+    h+='<pre>'+esc(t.description||'(no description)')+'</pre>'
+    if(t.input_preview) h+='<div class="lbl">Input preview</div><pre>'+esc(t.input_preview)+'</pre>'
+    h+='<div class="lbl" style="color:#9a6b00">Answering here is parallel to the terminal dialog \\u2014 whichever answers first wins.</div>'
+  }
   if(t.kind==='command') h+='<div class="lbl">Exact command (argv — approving runs exactly this)</div><pre>'+esc(JSON.stringify(t.command))+'</pre>'
   if(t.kind==='policy') h+='<div class="lbl">Policy run</div><pre>'+esc(t.policy)+'  (class: '+esc(t.policyClass)+')\\nargs: '+esc(JSON.stringify(t.args||[]))+'</pre>'
   if(t.kind==='policy-registration'){var r=t.registration

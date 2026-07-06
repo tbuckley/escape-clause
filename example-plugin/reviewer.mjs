@@ -16,6 +16,7 @@ function verifiedFacts(t) {
   if (t.command) f.command_argv = t.command
   if (t.policy) { f.policy = t.policy; f.policy_class = t.policyClass; f.args = t.args || [] }
   if (t.registration) f.policy_registration = t.registration // {name, class, description, script, previousScript?}
+  if (t.kind === 'permission') { f.relayed_tool = t.tool_name; f.description = t.description; f.input_preview = t.input_preview }
   return f
 }
 

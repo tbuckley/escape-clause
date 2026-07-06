@@ -1,0 +1,5 @@
+# broker runtime artifacts (large outputs spilled to the workspace)
+broker-output-*.txt
+launch_probe.txt
+ui_probe.txt
+audit_guard_*.txt

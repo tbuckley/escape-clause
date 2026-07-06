@@ -19,6 +19,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 import { execFile } from 'node:child_process'
 import { appendFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { z } from 'zod'
 import { DIR, audit, nextTicketId, saveTicket, getTicket } from './store.mjs'
 import { CLASSES, AUTO_CLASSES, NAME_RE, getPolicy, listPolicies, policyScript, installPolicy, runPolicy, seedPolicies } from './policies.mjs'
 import { review } from './reviewer.mjs'
@@ -33,7 +34,14 @@ const mcp = new Server(
   { name: 'broker', version: '0.1.0' },
   {
     capabilities: {
-      experimental: { 'claude/channel': {} }, // channel spec -> lets the broker PUSH notifications
+      experimental: {
+        'claude/channel': {},            // channel spec -> lets the broker PUSH notifications
+        'claude/channel/permission': {}, // permission relay -> Claude Code forwards its OWN tool-approval
+        //                                   prompts (Bash/Write/Edit, and network egress) here so the human
+        //                                   can answer them from the broker UI. Safe to declare only because
+        //                                   this channel authenticates the approver (bearer token on 8790);
+        //                                   fakechat, which has no auth, must NOT declare this.
+      },
       tools: {},
     },
     instructions:
@@ -165,8 +173,13 @@ function createTicket(fields) {
   audit('ticket_created', { ticket: t.ticket, kind: t.kind })
   log(`PENDING ${t.ticket} (${t.kind}) — review at http://127.0.0.1:${PORT}`)
   ui.broadcast()
-  // AI risk summary, async: the ticket is already visible; the summary streams in when
-  // ready (or never, if no API key — the UI approves fine from raw facts alone).
+  kickReviewer(t)
+  return { ticket: t.ticket, status: 'pending', note: 'A human will review this in the web UI. You will be notified of the outcome as a channel message. Continue other work.' }
+}
+
+// AI risk summary, async: the item is already visible; the summary streams in when ready
+// (or never, if no API key — the UI approves fine from raw facts alone).
+function kickReviewer(t) {
   review(t).then((summary) => {
     if (!summary) return
     const cur = getTicket(t.ticket)
@@ -175,7 +188,6 @@ function createTicket(fields) {
     saveTicket(cur)
     ui.broadcast()
   }).catch(() => {})
-  return { ticket: t.ticket, status: 'pending', note: 'A human will review this in the web UI. You will be notified of the outcome as a channel message. Continue other work.' }
 }
 
 // The single resolution path, called only by the web UI's authenticated endpoints.
@@ -186,6 +198,22 @@ async function resolveTicket(id, verdict, message) {
   t.status = verdict
   t.resolved = new Date().toISOString()
   if (message) t.note = message
+
+  // Permission relay: this item is a prompt Claude Code forwarded, not a broker request.
+  // Emit the verdict back on the permission channel; nothing executes here. The terminal
+  // dialog is still open in parallel — if it was answered first, Claude Code has no open
+  // request for this id and silently drops our verdict, which is harmless.
+  if (t.kind === 'permission') {
+    const behavior = verdict === 'approved' ? 'allow' : 'deny'
+    void mcp.notification({
+      method: 'notifications/claude/channel/permission',
+      params: { request_id: t.request_id, behavior },
+    })
+    saveTicket(t)
+    audit('permission_verdict', { request_id: t.request_id, behavior })
+    log(`PERMISSION ${id} -> ${behavior}`)
+    return { ok: true }
+  }
 
   if (verdict === 'rejected') {
     saveTicket(t)
@@ -243,6 +271,41 @@ function notify(ticket, verdict, body) {
   log(`NOTIFIED ${ticket}: ${verdict}`)
 }
 
+// ---------- permission relay ----------
+// Claude Code (the harness, NOT the agent) calls this when one of ITS OWN tool-approval
+// dialogs opens — Bash/Write/Edit, and the synthetic SandboxNetworkAccess egress prompt.
+// We surface it in the same UI queue as broker tickets (kind: 'permission'); resolving it
+// there emits the allow/deny verdict above. Only fires in interactive mode — in headless
+// `-p` the harness disables prompts entirely, so nothing is relayed.
+const PermissionRequestSchema = z.object({
+  method: z.literal('notifications/claude/channel/permission_request'),
+  params: z.object({
+    request_id: z.string(),
+    tool_name: z.string(),
+    description: z.string().optional().default(''),
+    input_preview: z.string().optional().default(''),
+  }),
+})
+mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
+  const t = {
+    ticket: `PERM-${params.request_id}`,
+    request_id: params.request_id,
+    kind: 'permission',
+    status: 'pending',
+    created: new Date().toISOString(),
+    tool_name: params.tool_name,
+    description: params.description,
+    input_preview: params.input_preview,
+    reason: `Claude Code is requesting permission to use ${params.tool_name}, relayed from the terminal. ` +
+      'Answering here is parallel to the terminal dialog — whichever answers first wins.',
+  }
+  saveTicket(t)
+  audit('permission_request', { request_id: params.request_id, tool_name: params.tool_name })
+  log(`PERMISSION ${t.ticket}: ${params.tool_name} — ${params.description || params.input_preview}`)
+  ui.broadcast()
+  kickReviewer(t)
+})
+
 const ui = startServer({ port: PORT, resolveTicket, log })
 await mcp.connect(new StdioServerTransport())
-log(`broker up (stdio MCP + channel). store: ${DIR}`)
+log(`broker up (stdio MCP + channel + permission relay). store: ${DIR}`)

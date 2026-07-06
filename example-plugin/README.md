@@ -104,6 +104,33 @@ a ticket — the UI shows the exact URL for review. Finally, ask the agent to *r
 new policy for something recurring: the proposed script itself arrives as a ticket, with
 the full source (and a diff, if it updates an existing policy) rendered for review.
 
+## Permission relay — answer the terminal's own prompts from the UI
+
+The broker also declares the channel [permission-relay capability](https://code.claude.com/docs/en/channels-reference#relay-permission-prompts)
+(`claude/channel/permission`). When **Claude Code itself** opens a tool-approval dialog —
+a `Bash`/`Write`/`Edit` prompt, or the `SandboxNetworkAccess` prompt you get when a
+sandboxed command reaches an off-allowlist domain — it forwards that prompt to the broker,
+which surfaces it in the **same 8790 queue** as a `permission` item (with an AI risk
+summary). Approve/Deny there emits the verdict back to Claude Code. The terminal dialog
+stays open in parallel; **whichever answers first wins**, so this is a second way to
+answer, not an auto-deny.
+
+This is why the broker is the right home for it and **fakechat is not**: the docs warn
+that *anyone who can reply through the channel can approve or deny tool use*, so the
+capability may only be declared on a channel that authenticates the approver. The broker's
+UI is bearer-token-gated; fakechat has no auth, so it must never declare it.
+
+> **Manual check (the one piece the automated audit can't reach).** Permission relay only
+> fires in an **interactive** session — headless `-p` disables terminal-input prompts
+> entirely, so the audit (which drives `claude -p`) can't exercise it. The broker's side of
+> the contract is covered by a protocol-level test, but whether Claude Code forwards the
+> `SandboxNetworkAccess` prompt *specifically* is its behavior, not the broker's. To
+> confirm: in the interactive session, ask the agent to `curl https://example.com` directly
+> (not via the broker). A `permission` card for `SandboxNetworkAccess` should appear in the
+> 8790 UI alongside the terminal dialog. If only the terminal dialog appears, that prompt
+> type isn't relayed on your CLI version — but `Bash`/`Write`/`Edit` approvals, which take
+> the same path, still are.
+
 ## How it works
 
 ```
@@ -117,9 +144,11 @@ you (fakechat UI) ──▶ agent (interactive claude, sandboxed: no network/hos
                    replies via fakechat
 ```
 
-- `broker.mjs` — MCP server + channel push + ticket lifecycle. Resolution exists **only**
-  on the web UI's authenticated endpoints; the MCP surface can create and read tickets,
-  never resolve them.
+- `broker.mjs` — MCP server + channel push + ticket lifecycle + permission relay.
+  Resolution exists **only** on the web UI's authenticated endpoints; the MCP surface can
+  create and read tickets, never resolve them. It also handles
+  `notifications/claude/channel/permission_request` (Claude Code's relayed tool prompts)
+  and emits the `…/permission` verdict when you answer in the UI.
 - `store.mjs` — durable state under `~/.clawmini-demo` (tickets, policies, token,
   append-only `audit.log`), a path the sandbox + guard hook deny to the agent. Tickets
   snapshot the exact argv/script at request time — the approved bytes are what run.

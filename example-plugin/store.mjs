@@ -38,8 +38,9 @@ export function nextTicketId() {
 }
 
 export function saveTicket(t) { writeFileSync(join(TICKETS, `${t.ticket}.json`), JSON.stringify(t, null, 2)) }
+const TICKET_ID_RE = /^(REQ-\d+|PERM-[a-km-z]{5})$/ // REQ-N broker tickets; PERM-<id> relayed permission prompts
 export function getTicket(id) {
-  if (!/^REQ-\d+$/.test(String(id))) return null
+  if (!TICKET_ID_RE.test(String(id))) return null
   try { return JSON.parse(readFileSync(join(TICKETS, `${id}.json`), 'utf8')) } catch { return null }
 }
 export function listTickets() {
