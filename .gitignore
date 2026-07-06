@@ -1,12 +1,13 @@
 # dependencies
 node_modules/
 
-# generated / runtime — ignore claude session state but keep committed project settings
-.claude/*
-!.claude/settings.json
+# claude session state — this source tree is deliberately NOT a launchable agent
+# workspace (the audit enforces no .claude/settings.json or .mcp.json here)
+.claude/
+.mcp.json
 *.log
 *.pid
-out.log
-err.log
 
-# broker runtime state lives in ~/.clawmini-demo (outside the repo)
+# local agent workspaces and spilled broker outputs
+test-workspace/
+broker-output-*.txt

@@ -1,6 +1,6 @@
 # Proposal: making the plugin broker real
 
-The current `example-plugin/` broker proves exactly one loop: `request_action(argv)` →
+The broker (repo root; formerly `example-plugin/`) proves exactly one loop: `request_action(argv)` →
 ticket → `./approve REQ-N` touch-file → run on host → channel notification. Everything
 else in the parent proposal (§2) is stubbed out. This document proposes the v1 upgrade —
 three features, in dependency order:
@@ -198,7 +198,7 @@ ground truth rather than config inspection:
    *plugin-provided* MCP servers, and fakechat delivers its tools as one — so strict mode
    kills the chat surface. The plugin example falls back to the `permissions.deny`
    denylist for the claude.ai servers (weaker; documented as such). The allowlist posture
-   stays in the SDK-driver `../example`, which controls MCP in code without a plugin
+   stays with SDK-driver setups, which control MCP in code without a plugin
    channel.
 
 Estimated size: the broker grows from ~100 lines to roughly 600–800 across

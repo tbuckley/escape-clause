@@ -28,9 +28,10 @@ install_app() {
   command -v node >/dev/null || { echo "error: node not found" >&2; exit 1; }
   mkdir -p "$BASE" "$APP"
   chmod 700 "$BASE"
-  for f in broker.mjs server.mjs store.mjs policies.mjs proxy.mjs reviewer.mjs guard.mjs clawmini.sh CLAUDE.md package.json; do
+  for f in broker.mjs server.mjs store.mjs policies.mjs proxy.mjs reviewer.mjs guard.mjs clawmini.sh package.json; do
     cp "$SRC/$f" "$APP/$f"
   done
+  cp "$SRC/templates/CLAUDE.md" "$APP/CLAUDE.md"   # workspace template, stamped by launch
   (cd "$APP" && npm install --omit=dev --no-fund --no-audit --loglevel=error)
   PW="$(cd "$APP" && node -e "import('./store.mjs').then(m => console.log(m.uiPassword()))")"
   cat <<EOF
@@ -101,7 +102,7 @@ EOF
   }
 }
 EOF
-  [ -f "$WS/CLAUDE.md" ] || cp "$APP/CLAUDE.md" "$WS/CLAUDE.md" 2>/dev/null || cp "$SRC/CLAUDE.md" "$WS/CLAUDE.md"
+  [ -f "$WS/CLAUDE.md" ] || cp "$APP/CLAUDE.md" "$WS/CLAUDE.md" 2>/dev/null || cp "$SRC/templates/CLAUDE.md" "$WS/CLAUDE.md"
 }
 
 launch() {

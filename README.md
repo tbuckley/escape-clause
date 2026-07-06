@@ -1,14 +1,17 @@
-# Clawmini broker — pure plugin, interactive claude
+# Clawmini — a sandboxed claude with a human-approval broker
 
-The counterpart to `../example` (the SDK-driver version). Here **claude runs normally**
-in an interactive session (e.g. in `tmux`), and the broker is **just a plugin** — one
-stdio MCP server that also implements the channel spec. It exposes escalation tools,
-runs a **policy engine** (named scripts with per-class auto-approval), serves an
-**approval web UI** with **AI risk summaries**, and **pushes async approve/reject
-notifications** back into the session. It does not drive claude.
+**claude runs normally** in an interactive session (e.g. in `tmux`), fully sandboxed
+(no network, no host access), and the broker is **just a plugin** — one stdio MCP server
+that also implements the channel spec. It exposes escalation tools, runs a **policy
+engine** (named scripts with per-class auto-approval), serves an **approval web UI**
+with **AI risk summaries**, and **pushes async approve/reject notifications** back into
+the session. It does not drive claude.
 
 Chat is via the **fakechat** channel; the broker handles requests, policies, review,
 and notifications.
+
+Repo layout: broker source + `clawmini.sh` at the root, the workspace `CLAUDE.md`
+template in `templates/`, design docs in `docs/`, and the behavioral audit in `tests/`.
 
 ## Why interactive (and not `-p`)
 
@@ -17,8 +20,9 @@ channel plugin **does not activate in headless (`-p`) mode** — its notificatio
 silently dropped (verified). In an **interactive** session it *does* activate and
 deliver. Verified end-to-end here: chat in via fakechat → agent files a broker request →
 you approve → the broker pushes a `<channel source="broker">` notification → the agent
-wakes and acts on it. (If you need headless/service operation, use the SDK-driver version
-in `../example`, which injects via the input stream and works headless.)
+wakes and acts on it. (An earlier SDK-driver variant that drove headless claude via the
+Agent SDK's input stream lived in this repo as `example/` — see git history if you need
+that pattern.)
 
 ## Run it
 
@@ -27,7 +31,6 @@ password (prereq: install fakechat once with `/plugin install fakechat@claude-pl
 inside claude):
 
 ```bash
-cd example-plugin
 ./clawmini.sh install     # copies the broker to ~/.clawmini-demo/app + npm install
 ```
 
@@ -77,8 +80,8 @@ if the guard is missing or crashes, the tool call is blocked, not waved through)
 > `mcp__claude_ai_*` entries in `permissions.deny` (see below). That is genuinely weaker —
 > you must name each dangerous server, and a server you connect *later* isn't denied by
 > default — so check `/mcp` for anything unexpected, and deny it. If you don't need a
-> plugin chat surface (e.g. the SDK-driver `../example`, where MCP is controlled in code),
-> the strict-allowlist posture is still the stronger choice.
+> plugin chat surface (e.g. an SDK-driver setup where MCP is controlled in code), the
+> strict-allowlist posture is still the stronger choice.
 
 Then open the **approval UI** at `http://127.0.0.1:8790` and **sign in** with the
 password from `~/.clawmini-demo/secrets/password` (printed by `install`; overwrite the
@@ -205,8 +208,7 @@ set, all sandboxed traffic routes to the custom proxies and the built-in proxy �
 prompt — is out of the path. (Leave `socksProxyPort` unset and non-HTTP protocols still
 route to the *built-in* SOCKS proxy, which can prompt — check `env | grep -i proxy` in a
 sandboxed shell to see the wiring.) The per-host decision is ours, and the policy is:
-deny everything, instantly, audit-logged. This flips the plugin's "per-host network
-policy / instant deny ✗" in the table below to a ✓.
+deny everything, instantly, audit-logged.
 
 Verified behaviorally, all three states fail closed:
 
@@ -263,21 +265,9 @@ you (fakechat UI) ──▶ agent (interactive claude, sandboxed: no network/hos
 - `guard.mjs` — `PreToolUse` hook (loaded from the protected install, fail-closed): one
   global choke point denying file tools on protected paths — the crown-jewel dirs,
   `~/.clawmini-demo` (store **and** broker code), and the workspace's own launch config.
-- `CLAUDE.md` — tells the agent the rules of the box (stamped into new workspaces).
-
-## Plugin vs. driver — when to use this one
-
-Use this (plugin) when you want to run claude **normally / interactively** and keep the
-broker as a small side component. Trade-offs vs. the SDK-driver version:
-
-| | Plugin (this) | Driver (`../example`) |
-|---|---|---|
-| claude runs | normally, interactive (tmux) | headless, driven by the broker |
-| async notifications | ✅ interactive only | ✅ headless too (input-stream) |
-| enforce "broker is the only exit" | sandbox denies; agent *should* use broker | `canUseTool` denies alternatives instantly |
-| per-host network policy / instant deny | ✅ deny-all egress proxy (`httpProxyPort`) | ✅ `canUseTool` |
-| sees full session / lifecycle control | ✗ | ✅ |
-| code size | smaller | larger |
+- `templates/CLAUDE.md` — tells the agent the rules of the box (stamped into new
+  workspaces; it lives in `templates/` so it isn't picked up as *this* repo's
+  project instructions).
 
 ## Security posture
 
@@ -304,16 +294,16 @@ And why the **broker itself** is out of the agent's reach:
    of waving them through.
 
 The sandbox is hardened (network denied, escape hatch closed via
-`allowUnsandboxedCommands: false`, `denyRead` on crown-jewel paths). Because the plugin
-variant has no `canUseTool` backstop, containment rests entirely on the settings:
+`allowUnsandboxedCommands: false`, `denyRead` on crown-jewel paths). Interactive claude
+has no `canUseTool` backstop, so containment rests entirely on the settings:
 - **`guard.mjs` (a `PreToolUse` hook)** blocks the native file tools on protected paths.
   These tools bypass `sandbox.filesystem.denyRead` (which only covers bash), and per-tool
   deny rules are leaky — you'd need `Read()`, `Edit()`, `Write()`, `Grep()`, `Glob()`, …
   and any future tool. The hook is wired with a `*` matcher, so it is a true global choke
   point: it runs before *every* tool call, resolves the target path with `realpath` (so a
   workspace symlink or `..` can't disguise a protected target), and denies — the settings
-  equivalent of the driver's `canUseTool`. Its behavioral denial is exercised by the audit's
-  Part D.
+  equivalent of the Agent SDK's `canUseTool`. Its behavioral denial is exercised by the
+  audit's Part D.
 - **Non-broker MCP is denied by a denylist** (`mcp__claude_ai_Gmail/Calendar/Drive` in
   `permissions.deny`). MCP servers run outside the sandbox, so each connected one is a
   network + private-data path. The stronger posture is an *allowlist* — `--strict-mcp-config
@@ -321,19 +311,18 @@ variant has no `canUseTool` backstop, containment rests entirely on the settings
   **plugin-provided** MCP servers, and fakechat *is* one (it delivers its tools as a plugin
   MCP server), so strict mode disables the chat surface. This example therefore uses the
   denylist, which is weaker: you must name each dangerous server, and one connected *later*
-  isn't denied by default. **Check `/mcp` for anything unexpected and deny it.** The
-  SDK-driver `../example` keeps the allowlist posture (it controls MCP in code, no plugin
-  channel). Note fakechat itself won't appear in `/mcp` — channels are listed separately
-  (confirmed by the startup `Channels:` line), and its tools are pre-allowed as
-  `mcp__plugin_fakechat_fakechat` in `settings.json`.
+  isn't denied by default. **Check `/mcp` for anything unexpected and deny it.** Note
+  fakechat itself won't appear in `/mcp` — channels are listed separately (confirmed by
+  the startup `Channels:` line), and its tools are pre-allowed as
+  `mcp__plugin_fakechat_fakechat` in the stamped `settings.json`.
 - **Hash pinning** makes registration review meaningful: policy bytes live only in the
   private store; a workspace copy the agent edits after approval is irrelevant, and an
   *update* re-enters review with an old→new diff (behaviorally proven by audit Part F).
 
-Verify all of it with `../tests/sandbox-audit.mjs` (Parts E–G cover the broker surface:
+Verify all of it with `node tests/sandbox-audit.mjs` (Parts E–G cover the broker surface:
 UI unreachable from the sandbox, hash pinning holds, auto-approve stays in class).
 
-## Not included (see ../claude-cli-security-proposal.md and PROPOSAL.md)
+## Not included (see docs/claude-cli-security-proposal.md and docs/PROPOSAL.md)
 
 File-reference payloads + CAS ingestion, cooldowns and rate caps, phone push, passkey +
 tailnet binding for the UI (the demo uses a password login + session cookie on
