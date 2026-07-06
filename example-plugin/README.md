@@ -91,5 +91,10 @@ broker as a small side component. Trade-offs vs. the SDK-driver version:
 ## Not included (see the proposal)
 
 Policy engine, payload snapshotting/CAS, reviewer LLM, cooldowns, audit log, real approval
-UI, crown-jewel filesystem denies. This is just the request → async approve/reject → notify
-loop as a plugin.
+UI. This is just the request → async approve/reject → notify loop as a plugin.
+
+The sandbox is hardened (network denied, escape hatch closed via
+`allowUnsandboxedCommands: false`, `denyRead` on crown-jewel paths) — verify with
+`../tests/sandbox-audit.mjs`. Note the plugin variant has no `canUseTool` backstop, so the
+sandbox settings are doing the real containment work; keeping them sound (which the audit
+checks) matters more here than in the driver variant.

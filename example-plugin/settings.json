@@ -5,5 +5,13 @@
     "allow": ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "mcp__broker__request_action"],
     "deny": ["WebFetch", "WebSearch"]
   },
-  "sandbox": { "enabled": true, "failIfUnavailable": true, "autoApprove": true, "network": { "allowedDomains": [] } }
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "autoApprove": true,
+    "allowUnsandboxedCommands": false,
+    "excludedCommands": [],
+    "network": { "allowedDomains": [] },
+    "filesystem": { "denyRead": ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/gcloud", "~/.clawmini-demo"] }
+  }
 }

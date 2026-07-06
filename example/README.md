@@ -111,6 +111,9 @@ notifications.
 
 Deliberately omitted for minimalism — see the proposal for the full design: policy
 engine (auto-approve read-only/private-write), payload snapshotting/CAS (TOCTOU),
-reviewer LLM, cooldowns, audit log, a real approval UI (tailnet + passkey), and the
-crown-jewel filesystem deny rules. This example is just the request → async approve/reject
-→ notify loop.
+reviewer LLM, cooldowns, audit log, and a real approval UI (tailnet + passkey). This
+example is just the request → async approve/reject → notify loop.
+
+The sandbox itself *is* hardened: network denied, escape hatch closed
+(`allowUnsandboxedCommands: false`), and `denyRead` on crown-jewel paths. Verify it with
+`../tests/sandbox-audit.mjs`.

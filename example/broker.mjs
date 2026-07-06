@@ -102,7 +102,12 @@ for await (const m of query({
     ...(USE_FAKECHAT ? { extraArgs: { channels: 'plugin:fakechat@claude-plugins-official' } } : { settingSources: [] }),
     disallowedTools: ['WebFetch', 'WebSearch'],
     mcpServers: { broker },
-    sandbox: { enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true, network: { allowedDomains: [] } },
+    sandbox: {
+      enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true,
+      allowUnsandboxedCommands: false, excludedCommands: [],   // close the dangerouslyDisableSandbox escape hatch
+      network: { allowedDomains: [] },
+      filesystem: { denyRead: ['~/.ssh', '~/.aws', '~/.gnupg', '~/.config/gcloud', '~/.clawmini-demo'] },
+    },
     canUseTool: async (toolName, input) => {
       if (toolName === 'SandboxNetworkAccess') { log(`DENY SandboxNetworkAccess host=${input?.host}`); return { behavior: 'deny', message: 'Outside-VM denied. Use broker request_action.' } }
       return { behavior: 'allow', updatedInput: input }
