@@ -26,6 +26,12 @@ import { review } from './reviewer.mjs'
 import { startServer } from './server.mjs'
 
 const PORT = Number(process.env.CLAWMINI_UI_PORT || 8790)
+// Base URL the USER reaches the review UI at — override when the UI is behind a tunnel /
+// reverse proxy (Tailscale, ngrok, a domain) so the link the agent shares is reachable.
+// Deliberately TOKEN-FREE: this is the one URL the sandboxed agent is allowed to know and
+// relay to a user; it must never carry the approval token (the token gates approve/deny).
+const UI_URL = (process.env.CLAWMINI_UI_URL || `http://127.0.0.1:${PORT}`).replace(/\/+$/, '')
+const ticketUrl = (id) => `${UI_URL}/?req=${encodeURIComponent(id)}`
 const log = (m) => { const s = `[${new Date().toISOString().slice(11, 19)}] ${m}\n`; appendFileSync(join(DIR, 'broker.log'), s); process.stderr.write(s) }
 
 // How the broker handles a permission prompt Claude Code relays to it (CLAWMINI_RELAY):
@@ -57,6 +63,7 @@ const mcp = new Server(
       'PREFER NAMED POLICIES over raw commands: list_policies() shows what exists; check_policy(policy, args) dry-runs the decision. ' +
       'request_action({policy, args, reason}) runs auto-approved classes (readonly/private-write) immediately and returns output; ' +
       'other classes and raw commands ({command: argv, reason}) return a ticket for human review — NON-BLOCKING. ' +
+      'A filed ticket comes back with a `url`; if a user is waiting on this, share that link so they can view and approve the exact request in the web UI. ' +
       'The outcome arrives later as a channel message: <channel source="broker" ticket="REQ-N" verdict="approved|rejected">. ' +
       'On "approved" the output is in that message — relay it to whoever asked. ' +
       'register_policy() proposes a new/updated policy script (itself human-reviewed). ' +
@@ -182,7 +189,11 @@ function createTicket(fields) {
   log(`PENDING ${t.ticket} (${t.kind}) — review at http://127.0.0.1:${PORT}`)
   ui.broadcast()
   kickReviewer(t)
-  return { ticket: t.ticket, status: 'pending', note: 'A human will review this in the web UI. You will be notified of the outcome as a channel message. Continue other work.' }
+  return {
+    ticket: t.ticket, status: 'pending', url: ticketUrl(t.ticket),
+    note: 'A human reviews this in the web UI. If a user is waiting, share the `url` so they can view and approve/deny this exact request. ' +
+      'You will be notified of the outcome as a channel message. Continue other work; do not poll.',
+  }
 }
 
 // AI risk summary, async: the item is already visible; the summary streams in when ready
@@ -325,6 +336,6 @@ mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
   kickReviewer(t)
 })
 
-const ui = startServer({ port: PORT, resolveTicket, log })
+const ui = startServer({ port: PORT, baseUrl: UI_URL, resolveTicket, log })
 await mcp.connect(new StdioServerTransport())
 log(`broker up (stdio MCP + channel, relay=${RELAY}). store: ${DIR}`)

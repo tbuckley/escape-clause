@@ -61,10 +61,21 @@ open "http://127.0.0.1:8790/#$(cat ~/.clawmini-demo/secrets/ui-token)"
 ```
 
 The token rides in the URL fragment (never sent over the wire) and is required for
-approve/deny — without it the page is read-only. For **AI risk summaries** on tickets,
-have `ANTHROPIC_API_KEY` set in the environment you launch `claude` from (the broker
-inherits it and makes one Haiku call per ticket). No key → tickets simply show
-"summary unavailable" and you review from the raw facts.
+approve/deny — without it the page is read-only. The page remembers the token in
+`localStorage` after one tokened visit, so the token-free links the agent shares (below)
+stay actionable on that device. For **AI risk summaries** on tickets, have
+`ANTHROPIC_API_KEY` set in the environment you launch `claude` from (the broker inherits
+it and makes one Haiku call per ticket). No key → tickets simply show "summary
+unavailable" and you review from the raw facts.
+
+**Sharing a request with a remote user.** When the agent files a ticket it gets back a
+token-free `url` (e.g. `http://127.0.0.1:8790/?req=REQ-2`) and is told to relay it, so a
+user chatting in over fakechat/Telegram gets a link straight to that request, which the UI
+scrolls to and highlights. If the UI is reachable off-box (Tailscale, a tunnel, a domain),
+set **`CLAWMINI_UI_URL`** in the broker's `.mcp.json` env to that base so the shared link
+resolves for the user; it defaults to `http://127.0.0.1:<port>`. The shared URL is
+deliberately **token-free** — the sandboxed agent never receives the approval token, only
+a pointer to the request.
 
 The sandbox config lives at **`.claude/settings.json`** so it auto-loads when you run
 `claude` from this directory — no `--settings` flag needed. (A plain `settings.json` in the

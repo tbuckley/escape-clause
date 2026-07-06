@@ -9,8 +9,9 @@
 import { createServer } from 'node:http'
 import { uiToken, listTickets } from './store.mjs'
 
-export function startServer({ port, resolveTicket, log }) {
+export function startServer({ port, baseUrl, resolveTicket, log }) {
   const token = uiToken()
+  const page = PAGE.replace(/__BASE_URL__/g, baseUrl || `http://127.0.0.1:${port}`)
   const sseClients = new Set()
   const broadcast = () => { for (const c of sseClients) c.write('data: update\n\n') }
 
@@ -18,7 +19,7 @@ export function startServer({ port, resolveTicket, log }) {
     const path = new URL(req.url, 'http://127.0.0.1').pathname
     try {
       if (req.method === 'GET' && path === '/') {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(PAGE)
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(page)
       } else if (req.method === 'GET' && path === '/api/tickets') {
         res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(listTickets()))
       } else if (req.method === 'GET' && path === '/events') {
@@ -74,8 +75,9 @@ const PAGE = `<!doctype html>
   #tokstate{font-size:12px;color:#e8b84d}
   main{max-width:900px;margin:20px auto 60px;padding:0 16px}
   h2{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:#5b6472;margin:26px 0 10px}
-  .card{background:#fff;border:1px solid #dce0e6;border-radius:10px;padding:14px 16px;margin-bottom:12px}
+  .card{background:#fff;border:1px solid #dce0e6;border-radius:10px;padding:14px 16px;margin-bottom:12px;scroll-margin-top:16px}
   .card.resolved{opacity:.75}
+  .card.focus{border-color:#7a5ea8;box-shadow:0 0 0 3px rgba(122,94,168,.35)}
   .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .id{font-weight:700;font-family:ui-monospace,Menlo,monospace}
   .tag{font-size:11px;padding:2px 8px;border-radius:99px;background:#e8ebf0;color:#3d4550}
@@ -104,9 +106,14 @@ const PAGE = `<!doctype html>
   <h2>History</h2><div id="history"></div>
 </main>
 <script>
-var token = location.hash.slice(1)
+// Token comes from the URL fragment, and we remember it in localStorage so a later
+// TOKEN-FREE deep link (like the ?req=... URL the agent shares) is still actionable on a
+// device that has opened the tokened URL once. The agent never sees the token.
+var hashTok = location.hash.slice(1)
+if (hashTok) localStorage.setItem('clawmini_token', hashTok)
+var token = hashTok || localStorage.getItem('clawmini_token') || ''
 if (!token) document.getElementById('tokstate').textContent =
-  'read-only: no token in URL — open http://127.0.0.1:PORT/#<token> (token is in ~/.clawmini-demo/secrets/ui-token)'
+  'read-only: open __BASE_URL__/#<token> once to enable approvals (token is in ~/.clawmini-demo/secrets/ui-token)'
 
 function esc(s){var d=document.createElement('div');d.textContent=String(s==null?'':s);return d.innerHTML}
 function age(iso){var s=Math.max(0,(Date.now()-Date.parse(iso))/1000)
@@ -140,7 +147,7 @@ function summary(t){
   return h+'</div>'
 }
 function card(t){
-  var h='<div class="card'+(t.status==='pending'?'':' resolved')+'"><div class="row">'
+  var h='<div class="card'+(t.status==='pending'?'':' resolved')+'" id="t-'+esc(t.ticket)+'"><div class="row">'
   h+='<span class="id">'+esc(t.ticket)+'</span><span class="tag">'+esc(t.kind)+'</span>'
   h+='<span class="tag '+esc(t.status)+'">'+esc(t.status)+'</span><span class="age">'+age(t.created)+'</span></div>'
   h+=facts(t)+summary(t)
@@ -159,6 +166,15 @@ function render(ts){
   var p=ts.filter(function(t){return t.status==='pending'}),r=ts.filter(function(t){return t.status!=='pending'})
   document.getElementById('pending').innerHTML=p.length?p.map(card).join(''):'<div class="empty">nothing waiting on you</div>'
   document.getElementById('history').innerHTML=r.length?r.map(card).join(''):'<div class="empty">no resolved requests yet</div>'
+  focusReq()
+}
+// The agent-shared link is __BASE_URL__/?req=REQ-N — scroll to and highlight that request.
+var focusedOnce=false
+function focusReq(){
+  var req=new URLSearchParams(location.search).get('req'); if(!req)return
+  var el=document.getElementById('t-'+req); if(!el)return
+  el.classList.add('focus')
+  if(!focusedOnce){focusedOnce=true; el.scrollIntoView({behavior:'smooth',block:'center'})}
 }
 function load(){fetch('/api/tickets').then(function(r){return r.json()}).then(render)}
 function act(id,verdict){
