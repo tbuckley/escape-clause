@@ -129,6 +129,23 @@ to escape (curl out, write outside the workspace, read denied paths, disable the
 sandbox) and ground-truths every result against decoy files. Exits `0` if sound. Re-run
 it after every `claude` upgrade, since upgrades can change sandbox behavior.
 
+### Known issue: fakechat swallows your first message after a relaunch
+
+Symptom: you launch a session, open fakechat, send a message — the agent never sees it,
+and on refresh the fakechat server is gone.
+
+Cause (a fakechat plugin bug, not an Escape Clause one): fakechat's server doesn't exit
+when its claude session ends, so a **previous** session's instance is still holding port
+8787. Your new session's fakechat then dies at startup with `EADDRINUSE` (the session
+has no chat connection at all), and the UI you opened belongs to the orphan. Your first
+message makes the orphan write a notification to its dead session's pipe — `EPIPE`,
+unhandled, process crash. That's why the server is "down" afterward: you just killed the
+zombie, and the port is now free.
+
+Fix: kill the orphan **before** launching (`lsof -ti :8787 | xargs kill`), or — after
+you've already hit it — run `/mcp` in the claude terminal and reconnect fakechat, which
+now binds cleanly. Messages sent before the reconnect are lost; resend them.
+
 ## Repo layout
 
 | Path | What it is |
