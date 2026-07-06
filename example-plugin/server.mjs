@@ -3,23 +3,87 @@
 // there is no code path from an agent-invokable interface to an approval.
 //
 // Reaching it: binds 127.0.0.1 only (never 0.0.0.0); the sandbox's empty network
-// allowlist blocks the agent from localhost entirely (verified — see the audit's Part E);
-// and approve/deny require the bearer token from the denyRead-protected secrets dir.
-// Approvals are POST-only from the page that renders the full payload — no approve-by-link.
+// allowlist blocks the agent from localhost entirely (verified — see the audit's Part E).
+//
+// Auth: password login (the password lives in the denyRead-protected secrets dir) mints a
+// session token set as an HttpOnly SameSite=Lax cookie. Every API route requires a
+// session, so the token-free ?req=... links the agent shares land on a login form and
+// become actionable after one login per device. Approvals are POST-only from the page
+// that renders the full payload — no approve-by-link, and the cookie is invisible to page
+// JS. Scripts can use the session from /api/login's response body as a Bearer header.
 import { createServer } from 'node:http'
-import { uiToken, listTickets } from './store.mjs'
+import { createHash, timingSafeEqual } from 'node:crypto'
+import { uiPassword, createSession, checkSession, destroySession, listTickets, audit, DIR } from './store.mjs'
+
+const COOKIE = 'clawmini_session'
+const SESSION_MAX_AGE_S = 30 * 24 * 3600
+
+// Constant-time string compare (hash both sides so length never leaks).
+const safeEqual = (a, b) => {
+  const h = (x) => createHash('sha256').update(String(x)).digest()
+  return timingSafeEqual(h(a), h(b))
+}
+
+function sessionOf(req) {
+  const m = /(?:^|;\s*)clawmini_session=([0-9a-f]{64})/.exec(req.headers.cookie || '')
+  if (m && checkSession(m[1])) return m[1]
+  const b = /^Bearer ([0-9a-f]{64})$/.exec(req.headers.authorization || '')
+  if (b && checkSession(b[1])) return b[1]
+  return null
+}
 
 export function startServer({ port, baseUrl, resolveTicket, log }) {
-  const token = uiToken()
+  uiPassword() // seed on first run so the file exists for the human to find
   const page = PAGE.replace(/__BASE_URL__/g, baseUrl || `http://127.0.0.1:${port}`)
   const sseClients = new Set()
   const broadcast = () => { for (const c of sseClients) c.write('data: update\n\n') }
+
+  // Brute-force damper: 5 straight failures -> 30s lockout (single shared counter — the
+  // UI is single-operator; anything noisier belongs in audit.log anyway).
+  let failures = 0, lockedUntil = 0
 
   const server = createServer(async (req, res) => {
     const path = new URL(req.url, 'http://127.0.0.1').pathname
     try {
       if (req.method === 'GET' && path === '/') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(page)
+        return
+      }
+      if (req.method === 'POST' && path === '/api/login') {
+        if (Date.now() < lockedUntil) {
+          res.writeHead(429, { 'content-type': 'text/plain' }).end('too many attempts — wait 30s')
+          return
+        }
+        const body = await readBody(req)
+        if (!safeEqual(String(body.password || ''), uiPassword())) {
+          if (++failures >= 5) { lockedUntil = Date.now() + 30_000; failures = 0 }
+          audit('ui_login_failed', {})
+          res.writeHead(401, { 'content-type': 'text/plain' }).end('wrong password')
+          return
+        }
+        failures = 0
+        const session = createSession()
+        audit('ui_login', {})
+        log('UI LOGIN ok — session created')
+        res.writeHead(200, {
+          'content-type': 'application/json',
+          'set-cookie': `${COOKIE}=${session}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_MAX_AGE_S}`,
+        }).end(JSON.stringify({ ok: true, session }))
+        return
+      }
+
+      // Everything below requires a session.
+      const session = sessionOf(req)
+      if (!session) {
+        res.writeHead(401, { 'content-type': 'text/plain' }).end('not logged in')
+        return
+      }
+      if (req.method === 'POST' && path === '/api/logout') {
+        destroySession(session)
+        res.writeHead(200, {
+          'content-type': 'application/json',
+          'set-cookie': `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`,
+        }).end(JSON.stringify({ ok: true }))
       } else if (req.method === 'GET' && path === '/api/tickets') {
         res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(listTickets()))
       } else if (req.method === 'GET' && path === '/events') {
@@ -28,10 +92,6 @@ export function startServer({ port, baseUrl, resolveTicket, log }) {
         sseClients.add(res)
         req.on('close', () => sseClients.delete(res))
       } else if (req.method === 'POST' && /^\/api\/tickets\/(REQ-\d+|PERM-[a-km-z]{5})\/(approve|deny)$/.test(path)) {
-        if (req.headers.authorization !== `Bearer ${token}`) {
-          res.writeHead(401, { 'content-type': 'text/plain' }).end('missing or bad token')
-          return
-        }
         const [, , , id, verdict] = path.split('/')
         const body = await readBody(req)
         const result = await resolveTicket(id, verdict === 'approve' ? 'approved' : 'rejected', String(body.message || ''))
@@ -50,7 +110,7 @@ export function startServer({ port, baseUrl, resolveTicket, log }) {
   // served by whichever broker got the port; they share the same ticket store.
   server.on('error', (e) => log(`web UI failed to start: ${e.message} (MCP tools still up)`))
   server.listen(port, '127.0.0.1', () =>
-    log(`web UI ready: http://127.0.0.1:${port}/#${token}   (token also in secrets/ui-token)`))
+    log(`web UI ready: http://127.0.0.1:${port}/   (login password: ${DIR}/secrets/password)`))
   return { broadcast }
 }
 
@@ -63,8 +123,8 @@ function readBody(req) {
 }
 
 // Single self-contained page: no framework, no build step, no external requests.
-// The token rides in the URL fragment (never sent to the server); page JS uses it as a
-// bearer header on approve/deny. Without it the queue is read-only.
+// Auth is the HttpOnly session cookie — page JS never sees a credential; it only posts
+// the password once at login. Without a session the page shows the login form.
 const PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Clawmini broker — approvals</title>
@@ -72,7 +132,8 @@ const PAGE = `<!doctype html>
   body{font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;background:#f4f5f7;color:#1b1e22}
   header{background:#16181c;color:#fff;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;gap:12px}
   header h1{font-size:15px;margin:0;font-weight:600}
-  #tokstate{font-size:12px;color:#e8b84d}
+  #authstate{font-size:12px;color:#e8b84d}
+  #authstate button{background:none;border:1px solid #555;color:#ccc;font-size:11px;padding:2px 10px}
   main{max-width:900px;margin:20px auto 60px;padding:0 16px}
   h2{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:#5b6472;margin:26px 0 10px}
   .card{background:#fff;border:1px solid #dce0e6;border-radius:10px;padding:14px 16px;margin-bottom:12px;scroll-margin-top:16px}
@@ -95,26 +156,33 @@ const PAGE = `<!doctype html>
   button{border:0;border-radius:7px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer}
   button:disabled{opacity:.45;cursor:not-allowed}
   .ok{background:#1d7a2e;color:#fff}.no{background:#b3261e;color:#fff}
-  input[type=text]{flex:1;min-width:180px;border:1px solid #ccd2da;border-radius:7px;padding:7px 10px;font-size:13px}
+  input[type=text],input[type=password]{flex:1;min-width:180px;border:1px solid #ccd2da;border-radius:7px;padding:7px 10px;font-size:13px}
   .empty{color:#8a93a0;font-style:italic}
   .out{max-height:200px;overflow-y:auto}
+  #login{max-width:420px;margin:60px auto;background:#fff;border:1px solid #dce0e6;border-radius:10px;padding:22px}
+  #login h2{margin:0 0 8px;text-transform:none;font-size:15px;letter-spacing:0;color:#1b1e22}
+  #login p{font-size:13px;color:#5b6472;margin:0 0 14px}
+  #login form{display:flex;gap:8px}
+  #login button{background:#16181c;color:#fff}
+  #loginerr{color:#b3261e;font-size:13px;margin-top:10px;min-height:1em}
 </style></head>
 <body>
-<header><h1>Clawmini broker — approval queue</h1><div id="tokstate"></div></header>
-<main>
+<header><h1>Clawmini broker — approval queue</h1><div id="authstate"></div></header>
+<div id="login" hidden>
+  <h2>Sign in to review requests</h2>
+  <p>The password is on the broker host in <code>~/.clawmini-demo/secrets/password</code>.
+  After signing in, links to individual requests (like the one that brought you here) work directly.</p>
+  <form onsubmit="return login(event)">
+    <input type="password" id="pw" placeholder="password" autocomplete="current-password" autofocus>
+    <button type="submit">Sign in</button>
+  </form>
+  <div id="loginerr"></div>
+</div>
+<main hidden>
   <h2>Pending</h2><div id="pending"></div>
   <h2>History</h2><div id="history"></div>
 </main>
 <script>
-// Token comes from the URL fragment, and we remember it in localStorage so a later
-// TOKEN-FREE deep link (like the ?req=... URL the agent shares) is still actionable on a
-// device that has opened the tokened URL once. The agent never sees the token.
-var hashTok = location.hash.slice(1)
-if (hashTok) localStorage.setItem('clawmini_token', hashTok)
-var token = hashTok || localStorage.getItem('clawmini_token') || ''
-if (!token) document.getElementById('tokstate').textContent =
-  'read-only: open __BASE_URL__/#<token> once to enable approvals (token is in ~/.clawmini-demo/secrets/ui-token)'
-
 function esc(s){var d=document.createElement('div');d.textContent=String(s==null?'':s);return d.innerHTML}
 function age(iso){var s=Math.max(0,(Date.now()-Date.parse(iso))/1000)
   return s<60?Math.round(s)+'s ago':s<3600?Math.round(s/60)+'m ago':Math.round(s/3600)+'h ago'}
@@ -153,8 +221,8 @@ function card(t){
   h+=facts(t)+summary(t)
   h+='<div class="claim"><div class="lbl">Agent\\u2019s claim (untrusted — may be attacker-controlled)</div>'+esc(t.reason||'(none)')+'</div>'
   if(t.status==='pending'){
-    h+='<div class="actions"><button class="ok" '+(token?'':'disabled ')+'onclick="act(\\''+t.ticket+'\\',\\'approve\\')">Approve once</button>'
-    h+='<button class="no" '+(token?'':'disabled ')+'onclick="act(\\''+t.ticket+'\\',\\'deny\\')">Deny</button>'
+    h+='<div class="actions"><button class="ok" onclick="act(\\''+t.ticket+'\\',\\'approve\\')">Approve once</button>'
+    h+='<button class="no" onclick="act(\\''+t.ticket+'\\',\\'deny\\')">Deny</button>'
     h+='<input type="text" id="msg-'+t.ticket+'" placeholder="optional message back to the agent (sent on deny)"></div>'
   } else {
     if(t.note)h+='<div class="lbl">Decision note</div><div>'+esc(t.note)+'</div>'
@@ -176,15 +244,47 @@ function focusReq(){
   el.classList.add('focus')
   if(!focusedOnce){focusedOnce=true; el.scrollIntoView({behavior:'smooth',block:'center'})}
 }
-function load(){fetch('/api/tickets').then(function(r){return r.json()}).then(render)}
+
+// Auth flow: probe /api/tickets; a 401 means no session -> show the login form. The
+// session lives in an HttpOnly cookie the browser attaches automatically.
+var sse=null
+function showLogin(){
+  document.getElementById('login').hidden=false
+  document.querySelector('main').hidden=true
+  document.getElementById('authstate').textContent='signed out'
+  if(sse){sse.close();sse=null}
+}
+function showQueue(ts){
+  document.getElementById('login').hidden=true
+  document.querySelector('main').hidden=false
+  document.getElementById('authstate').innerHTML='signed in &nbsp;<button onclick="logout()">sign out</button>'
+  render(ts)
+  if(!sse){sse=new EventSource('/events');sse.onmessage=load}
+}
+function load(){
+  fetch('/api/tickets').then(function(r){
+    if(r.status===401){showLogin();return null}
+    return r.json()
+  }).then(function(ts){if(ts)showQueue(ts)})
+}
+function login(ev){
+  ev.preventDefault()
+  var pw=document.getElementById('pw').value
+  fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:pw})})
+    .then(function(r){
+      if(r.ok){document.getElementById('pw').value='';document.getElementById('loginerr').textContent='';load()}
+      else r.text().then(function(t){document.getElementById('loginerr').textContent=t})
+    })
+  return false
+}
+function logout(){fetch('/api/logout',{method:'POST'}).then(function(){showLogin()})}
 function act(id,verdict){
   var msg=(document.getElementById('msg-'+id)||{}).value||''
   fetch('/api/tickets/'+id+'/'+verdict,{method:'POST',
-    headers:{authorization:'Bearer '+token,'content-type':'application/json'},
+    headers:{'content-type':'application/json'},
     body:JSON.stringify({message:msg})
   }).then(function(r){if(!r.ok)return r.text().then(function(t){alert(verdict+' failed: '+t)});load()})
 }
-new EventSource('/events').onmessage=load
 load()
 </script>
 </body></html>`

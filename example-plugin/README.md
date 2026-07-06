@@ -22,23 +22,50 @@ in `../example`, which injects via the input stream and works headless.)
 
 ## Run it
 
-From inside this directory, launch claude with both channels (do this in a tmux pane so
-it keeps running):
+**One-time install** — puts the broker where the agent can't touch it and prints the UI
+password (prereq: install fakechat once with `/plugin install fakechat@claude-plugins-official`
+inside claude):
 
 ```bash
 cd example-plugin
-claude \
-  --channels plugin:fakechat@claude-plugins-official \
-  --dangerously-load-development-channels server:broker
+./clawmini.sh install     # copies the broker to ~/.clawmini-demo/app + npm install
 ```
+
+**Launch** — from an agent workspace, i.e. any directory that does **not** contain the
+broker source (the launcher refuses the source tree and the protected store). Do this in
+a tmux pane so it keeps running:
+
+```bash
+~/.clawmini-demo/app/clawmini.sh launch ~/clawmini-workspace
+```
+
+`launch` does two things:
+
+1. **(Re)stamps the workspace config** — `.claude/settings.json`, `.claude/settings.local.json`,
+   `.mcp.json` — from the protected install, and drops a `CLAUDE.md` if the workspace has
+   none. Stamping on *every* launch means a config the agent tampered with mid-session
+   (file tools are guard-blocked, but sandboxed bash can still write inside its own
+   workspace) is never what actually launches.
+2. Execs `claude --channels plugin:fakechat@claude-plugins-official
+   --dangerously-load-development-channels server:broker`.
 
 - `--channels plugin:fakechat@...` — the chat surface. fakechat is a **plugin channel**:
   it ships its own MCP server (`bun … start`, tools `reply`/`edit_message`) that both
   serves the web UI on `localhost:8787` and delivers the reply tool.
 - `--dangerously-load-development-channels server:broker` — promotes the broker MCP server
   to a channel so it can push notifications (custom channels need this flag during the
-  research preview). The broker itself loads from the project `.mcp.json` automatically
-  (`enableAllProjectMcpServers` + the one-time trust in `settings.local.json`).
+  research preview). The broker itself loads from the stamped `.mcp.json` automatically
+  (`enableAllProjectMcpServers` + the pre-trust in the stamped `settings.local.json`) —
+  and its command path points into `~/.clawmini-demo/app`, not the workspace.
+
+**Why the broker must not live in the workspace:** the workspace is agent-writable by
+design (sandboxed bash + the allowed `Edit`/`Write` tools). If `broker.mjs`/`guard.mjs`
+sat there — as an earlier version of this example had it — the agent could rewrite the
+very code that executes approvals and enforces the guard, and its edits would run with
+full host privileges at the next launch. The install dir sits under `~/.clawmini-demo`,
+which the sandbox `denyRead` and the guard hook already deny to the agent, and the guard
+hook itself is loaded from that protected path **fail-closed** (`node …/guard.mjs || exit 2`:
+if the guard is missing or crashes, the tool call is blocked, not waved through).
 
 > **Why not `--strict-mcp-config --mcp-config .mcp.json`?** An earlier version of this doc
 > launched with those flags to make MCP an *allowlist* (only the vetted broker server
@@ -53,40 +80,37 @@ claude \
 > plugin chat surface (e.g. the SDK-driver `../example`, where MCP is controlled in code),
 > the strict-allowlist posture is still the stronger choice.
 
-Then open the **approval UI**. The broker prints its tokened URL to
-`~/.clawmini-demo/broker.log` at startup, or build it yourself:
-
-```bash
-open "http://127.0.0.1:8790/#$(cat ~/.clawmini-demo/secrets/ui-token)"
-```
-
-The token rides in the URL fragment (never sent over the wire) and is required for
-approve/deny — without it the page is read-only. The page remembers the token in
-`localStorage` after one tokened visit, so the token-free links the agent shares (below)
-stay actionable on that device. For **AI risk summaries** on tickets, have
-`ANTHROPIC_API_KEY` set in the environment you launch `claude` from (the broker inherits
-it and makes one Haiku call per ticket). No key → tickets simply show "summary
-unavailable" and you review from the raw facts.
+Then open the **approval UI** at `http://127.0.0.1:8790` and **sign in** with the
+password from `~/.clawmini-demo/secrets/password` (printed by `install`; overwrite the
+file with your own to change it). Login mints a 30-day session carried in an **HttpOnly
+`SameSite=Lax` cookie** — page JS never sees a credential, and every API route (reads
+included) requires the session, so an unauthenticated visitor gets a login form, not a
+ticket list. Five wrong passwords locks login for 30 seconds; logins and failures land in
+`audit.log`. For **AI risk summaries** on tickets, have `ANTHROPIC_API_KEY` set in the
+environment you launch `claude` from (the broker inherits it and makes one Haiku call per
+ticket). No key → tickets simply show "summary unavailable" and you review from the raw
+facts.
 
 **Sharing a request with a remote user.** When the agent files a ticket it gets back a
-token-free `url` (e.g. `http://127.0.0.1:8790/?req=REQ-2`) and is told to relay it, so a
-user chatting in over fakechat/Telegram gets a link straight to that request, which the UI
-scrolls to and highlights. If the UI is reachable off-box (Tailscale, a tunnel, a domain),
-set **`CLAWMINI_UI_URL`** in the broker's `.mcp.json` env to that base so the shared link
-resolves for the user; it defaults to `http://127.0.0.1:<port>`. The shared URL is
-deliberately **token-free** — the sandboxed agent never receives the approval token, only
-a pointer to the request.
+credential-free `url` (e.g. `http://127.0.0.1:8790/?req=REQ-2`) and is told to relay it,
+so a user chatting in over fakechat/Telegram gets a link straight to that request, which
+the UI scrolls to and highlights. On a device that hasn't signed in yet the link lands on
+the login form first — enter the password once and the request is right there, actionable.
+If the UI is reachable off-box (Tailscale, a tunnel, a domain), set **`CLAWMINI_UI_URL`**
+when you run `clawmini.sh launch` (it's stamped into the broker's `.mcp.json` env) so the
+shared link resolves for the user; it defaults to `http://127.0.0.1:<port>`. The shared
+URL is deliberately **credential-free** — the sandboxed agent never receives the password
+or a session, only a pointer to the request.
 
-The sandbox config lives at **`.claude/settings.json`** so it auto-loads when you run
-`claude` from this directory — no `--settings` flag needed. (A plain `settings.json` in the
-project root is *not* auto-loaded, which would silently run with no sandbox at all. The
-audit's Part C verifies the sandbox actually engages on launch.) You can confirm it's live
-by asking the agent to run `env | grep SANDBOX_RUNTIME` — `SANDBOX_RUNTIME=1` only appears
+The stamped sandbox config lands at **`<workspace>/.claude/settings.json`** so it
+auto-loads — no `--settings` flag needed. (A plain `settings.json` in the workspace root
+is *not* auto-loaded, which would silently run with no sandbox at all. The audit's Part C
+verifies the sandbox actually engages on a stamped launch.) You can confirm it's live by
+asking the agent to run `env | grep SANDBOX_RUNTIME` — `SANDBOX_RUNTIME=1` only appears
 when sandboxed (and `HTTP_PROXY` should point at the deny-all proxy on `:8791`).
 
-On first launch claude asks you to trust the workspace and the new MCP server — accept
-both. A startup line confirms the channel: `Channels: server:broker`. (Prereq: install
-fakechat once with `/plugin install fakechat@claude-plugins-official` inside claude.)
+On first launch claude asks you to trust the workspace — accept. A startup line confirms
+the channel: `Channels: server:broker`.
 
 ## Test it
 
@@ -134,24 +158,25 @@ job, which kills them at the source.
 This is why the broker is the right home for it and **fakechat is not**: the docs warn
 that *anyone who can reply through the channel can approve or deny tool use*, so the
 capability may only be declared on a channel that authenticates the approver. The broker's
-UI is bearer-token-gated; fakechat has no auth, so it must never declare it.
+UI is behind a password login; fakechat has no auth, so it must never declare it.
 
 ### Relay mode (`CLAWMINI_RELAY`)
 
-Set it in the broker's `.mcp.json` entry:
+Set it at launch time — the launcher stamps it into the workspace `.mcp.json` env:
 
-```json
-{ "mcpServers": { "broker": {
-  "command": "node", "args": ["…/broker.mjs"],
-  "env": { "CLAWMINI_RELAY": "deny" }
-} } }
+```bash
+CLAWMINI_RELAY=forward ~/.clawmini-demo/app/clawmini.sh launch ~/clawmini-workspace
 ```
 
 | Mode | Behavior |
 |---|---|
-| `forward` (default) | Surface each relayed prompt in the UI queue and wait for a human verdict. Best for the demo / when you want to review. |
-| `deny` | **Auto-deny every relayed prompt immediately** — no human, no UI ticket, just an `audit.log` entry. |
+| `forward` | Surface each relayed prompt in the UI queue and wait for a human verdict. Best for the demo / when you want to review. |
+| `deny` (stamped default) | **Auto-deny every relayed prompt immediately** — no human, no UI ticket, just an `audit.log` entry. |
 | `off` | Don't declare the relay capability at all; prompts stay in the terminal (pre-relay behavior). |
+
+(The broker binary's own fallback when the variable is unset is `forward`; the launcher
+stamps `deny` because the stamped settings already allow every tool the box is meant to
+have.)
 
 **`deny` is the "my allow-list is complete" mode.** The premise: your `settings.json`
 already auto-allows every tool you care about (`Bash`, `Read`, `Edit`, … and the
@@ -205,7 +230,7 @@ you (fakechat UI) ──▶ agent (interactive claude, sandboxed: no network/hos
                          │                       auto class ──▶ runs now, output inline
                          ▼                       review class ─▶ { ticket, pending }
                    broker: pending REQ-N ──▶ AI risk summary (Haiku, broker-owned)
-   you ─▶ web UI (127.0.0.1:8790 + token) ─▶ Approve/Deny ─▶ broker executes the SNAPSHOT
+   you ─▶ web UI (127.0.0.1:8790 + login) ─▶ Approve/Deny ─▶ broker executes the SNAPSHOT
                    and PUSHES <channel source="broker" ticket="REQ-N" verdict="…"> ─▶ agent wakes,
                    replies via fakechat
 ```
@@ -215,24 +240,30 @@ you (fakechat UI) ──▶ agent (interactive claude, sandboxed: no network/hos
   create and read tickets, never resolve them. It also handles
   `notifications/claude/channel/permission_request` (Claude Code's relayed tool prompts)
   and emits the `…/permission` verdict when you answer in the UI.
-- `store.mjs` — durable state under `~/.clawmini-demo` (tickets, policies, token,
-  append-only `audit.log`), a path the sandbox + guard hook deny to the agent. Tickets
-  snapshot the exact argv/script at request time — the approved bytes are what run.
+- `store.mjs` — durable state under `~/.clawmini-demo` (tickets, policies, the UI
+  password + login sessions, append-only `audit.log`), a path the sandbox + guard hook
+  deny to the agent. Tickets snapshot the exact argv/script at request time — the
+  approved bytes are what run.
 - `policies.mjs` — named scripts pinned by sha256 in the private store, invoked as
   `execve(script, args)` (never a shell). Seeds `host-info` (readonly) and `fetch-url`
   (public-write).
-- `server.mjs` — the web UI: live queue (SSE), raw facts first, AI summary as an advisory
-  panel, agent claim quarantined, POST-only approve/deny behind the bearer token.
+- `server.mjs` — the web UI: password login → HttpOnly session cookie, live queue (SSE),
+  raw facts first, AI summary as an advisory panel, agent claim quarantined, POST-only
+  approve/deny — every API route session-gated.
 - `proxy.mjs` — deny-all egress proxy the sandbox routes through (`httpProxyPort`):
   refuses every CONNECT/request instantly, audit-logged, no prompt. Fail-closed even when
   down. The broker is the only way out of the box.
 - `reviewer.mjs` — one direct API call per ticket, verified facts only, strict JSON
   schema, cached by content hash. Advisory, never load-bearing.
-- `.mcp.json` / `.claude/settings.json` — register + pre-trust the broker; sandbox on with
-  network routed to the deny-all proxy (`httpProxyPort: 8791`), so the agent *must* use
-  the broker to leave the box.
-- `guard.mjs` — `PreToolUse` hook: one global choke point denying file tools on protected paths.
-- `CLAUDE.md` — tells the agent the rules of the box.
+- `clawmini.sh` — `install` copies all of the above to `~/.clawmini-demo/app`
+  (agent-inaccessible); `launch` re-stamps the workspace's `.mcp.json` /
+  `.claude/settings.json` from there (register + pre-trust the broker; sandbox on with
+  network routed to the deny-all proxy, so the agent *must* use the broker to leave the
+  box) and execs claude.
+- `guard.mjs` — `PreToolUse` hook (loaded from the protected install, fail-closed): one
+  global choke point denying file tools on protected paths — the crown-jewel dirs,
+  `~/.clawmini-demo` (store **and** broker code), and the workspace's own launch config.
+- `CLAUDE.md` — tells the agent the rules of the box (stamped into new workspaces).
 
 ## Plugin vs. driver — when to use this one
 
@@ -257,8 +288,20 @@ Why the approve path is out of the agent's reach — three independent layers:
    (verified; re-proven by the audit's Part E against the live UI port);
 2. the **MCP surface has no resolve tool** — by construction there is no code path from
    an agent-invokable interface to a ticket-state transition;
-3. approve/deny require the bearer token in `~/.clawmini-demo/secrets/`, which is
-   denyRead- and guard-protected.
+3. approve/deny require a **login session**: the password lives in
+   `~/.clawmini-demo/secrets/password` (denyRead- and guard-protected), and the session
+   rides in an HttpOnly cookie the page's JS can't read.
+
+And why the **broker itself** is out of the agent's reach:
+
+4. the broker's code runs from `~/.clawmini-demo/app` — inside the same denyRead- and
+   guard-protected dir as its state — never from the agent's writable workspace;
+5. the workspace launch config (`.claude/`, `.mcp.json`) is guard-protected against file
+   tools **and** re-stamped from the protected install on every launch, so pointing
+   `.mcp.json` at a different broker or dropping the sandbox doesn't survive;
+6. the guard hook is loaded from the protected install and **fails closed**
+   (`node …/guard.mjs || exit 2`): a missing or crashing guard blocks tool calls instead
+   of waving them through.
 
 The sandbox is hardened (network denied, escape hatch closed via
 `allowUnsandboxedCommands: false`, `denyRead` on crown-jewel paths). Because the plugin
@@ -293,5 +336,5 @@ UI unreachable from the sandbox, hash pinning holds, auto-approve stays in class
 ## Not included (see ../claude-cli-security-proposal.md and PROPOSAL.md)
 
 File-reference payloads + CAS ingestion, cooldowns and rate caps, phone push, passkey +
-tailnet binding for the UI (the demo uses a bearer token on localhost), the batch audit
-digest, subagent launching.
+tailnet binding for the UI (the demo uses a password login + session cookie on
+localhost), the batch audit digest, subagent launching.

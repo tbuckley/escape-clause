@@ -20,12 +20,41 @@ export const sha256 = (s) => createHash('sha256').update(s).digest('hex')
 export const audit = (event, data = {}) =>
   appendFileSync(join(DIR, 'audit.log'), JSON.stringify({ ts: new Date().toISOString(), event, ...data }) + '\n')
 
-// Bearer token the approve/deny endpoints require. Lives only in the protected store;
-// the human reads it out-of-band (the broker logs the tokened URL at startup).
-export function uiToken() {
-  const f = join(SECRETS, 'ui-token')
-  if (!existsSync(f)) writeFileSync(f, randomBytes(24).toString('hex'), { mode: 0o600 })
+// Password the web UI's login requires. Lives only in the protected store; seeded random
+// on first run (the installer prints it), and the human can overwrite the file with their
+// own. Logging in mints a session token (below) carried in an HttpOnly cookie — so the
+// links the agent shares stay token-free, and the page becomes actionable after login.
+export function uiPassword() {
+  const f = join(SECRETS, 'password')
+  if (!existsSync(f)) writeFileSync(f, randomBytes(12).toString('base64url'), { mode: 0o600 })
   return readFileSync(f, 'utf8').trim()
+}
+
+// Login sessions, persisted so a broker restart doesn't sign everyone out. High-entropy
+// random tokens; pruned on every load.
+const SESSIONS = join(SECRETS, 'sessions.json')
+const SESSION_TTL_MS = 30 * 24 * 3600 * 1000
+function loadSessions() {
+  let s = {}
+  try { s = JSON.parse(readFileSync(SESSIONS, 'utf8')) } catch {}
+  const cutoff = Date.now() - SESSION_TTL_MS
+  for (const [tok, v] of Object.entries(s)) if (!v?.created || Date.parse(v.created) < cutoff) delete s[tok]
+  return s
+}
+const saveSessions = (s) => writeFileSync(SESSIONS, JSON.stringify(s), { mode: 0o600 })
+export function createSession() {
+  const s = loadSessions()
+  const tok = randomBytes(32).toString('hex')
+  s[tok] = { created: new Date().toISOString() }
+  saveSessions(s)
+  return tok
+}
+export function checkSession(tok) {
+  return typeof tok === 'string' && /^[0-9a-f]{64}$/.test(tok) && !!loadSessions()[tok]
+}
+export function destroySession(tok) {
+  const s = loadSessions()
+  if (typeof tok === 'string' && s[tok]) { delete s[tok]; saveSessions(s) }
 }
 
 // Monotonic across restarts, so REQ-N is never reused and the audit trail stays unambiguous.

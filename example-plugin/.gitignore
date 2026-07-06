@@ -1,5 +1,4 @@
-# broker runtime artifacts (large outputs spilled to the workspace)
+# broker runtime artifacts (large outputs spilled to the agent workspace, if one is ever
+# pointed at this dir) — real workspaces are stamped elsewhere by clawmini.sh
 broker-output-*.txt
-launch_probe.txt
-ui_probe.txt
-audit_guard_*.txt
+node_modules/

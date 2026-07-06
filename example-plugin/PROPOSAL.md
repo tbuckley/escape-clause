@@ -34,7 +34,8 @@ ambiguous audit trail). Move state into the private store the sandbox already pr
                          #   reviewer summary (when ready)
   policies/<name>.json   # policy manifest: description, class, sha256, installed-at
   policies/<name>.script # the executable bytes (the ONLY copy that ever runs)
-  secrets/ui-token       # bearer token for the approve API (created on first run)
+  secrets/password       # web UI login password (seeded on first run, user-editable)
+  secrets/sessions.json  # login sessions (HttpOnly cookie tokens), pruned on expiry
   audit.log              # append-only: every request, decision, execution, registration
   counter                # monotonic ticket counter
 ```
@@ -74,19 +75,20 @@ server-sent events for live updates, in keeping with the example's size.
   free: the sandbox's empty `allowedDomains` blocks bash from localhost (verified);
   the MCP surface has **no resolve tool** — tools can create and read tickets, never
   transition them, so there is no code path from an agent-invokable interface to an
-  approval; and the approve endpoint requires the bearer token in
-  `~/.clawmini-demo/secrets/ui-token`, which is denyRead- and guard-protected.
+  approval; and the API requires a login session minted from the password in
+  `~/.clawmini-demo/secrets/password`, which is denyRead- and guard-protected.
 - *Only the user can resolve tickets.* Bind `127.0.0.1` explicitly (never `0.0.0.0`).
-  Approvals are `POST` only, carry the bearer token, and the button lives on the page
-  that renders the full payload — there is no approve-by-link and no approval without
-  the snapshot displayed. Production hardening (tailnet binding, passkey, CSRF beyond
-  the token, phone push) stays documented-but-out-of-scope, as in the parent proposal.
+  Approvals are `POST` only, carry an HttpOnly `SameSite=Lax` session cookie, and the
+  button lives on the page that renders the full payload — there is no approve-by-link
+  and no approval without the snapshot displayed. Production hardening (tailnet binding,
+  passkey, CSRF beyond SameSite, phone push) stays documented-but-out-of-scope, as in
+  the parent proposal.
 
 **The `./approve` / `./deny` scripts are deleted.** The web UI becomes the only human
 approval surface, and the 400ms verdict-file poller goes with them — the HTTP endpoint
 is the single resolution code path. The audit doesn't need the scripts either: it runs
-unsandboxed as the user, so where a test must resolve a ticket (Part F below) it reads
-the token and POSTs to the same endpoint the UI uses.
+unsandboxed as the user, so where a test must resolve a ticket (Part F below) it logs in
+with the stored password and POSTs to the same endpoint the UI uses.
 
 ## 2. Named policy scripts
 

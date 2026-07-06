@@ -36,12 +36,20 @@ function realish(p) {
   }
 }
 
-const PROTECTED = ['.ssh', '.aws', '.gnupg', '.config/gcloud', '.clawmini-demo']
-  .map((p) => realish(join(homedir(), p)))
-const isProtected = (p) => { const a = realish(p); return !!a && PROTECTED.some((x) => a === x || a.startsWith(x + '/')) }
-
 let input = {}
 try { input = JSON.parse(readFileSync(0, 'utf8')) } catch {}
+
+// ~/.clawmini-demo covers the broker's state AND its installed code (~/.clawmini-demo/app)
+// — the agent must not be able to modify the server that executes approvals. The
+// workspace's own launch config (.claude/, .mcp.json) is protected too: editing it is how
+// an agent would swap in its own broker or drop the sandbox on the NEXT launch. (The
+// launcher also re-stamps that config from the protected store every launch.)
+const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd || ''
+const PROTECTED = ['.ssh', '.aws', '.gnupg', '.config/gcloud', '.clawmini-demo']
+  .map((p) => join(homedir(), p))
+  .concat(projectDir ? [join(projectDir, '.claude'), join(projectDir, '.mcp.json')] : [])
+  .map(realish)
+const isProtected = (p) => { const a = realish(p); return !!a && PROTECTED.some((x) => a === x || a.startsWith(x + '/')) }
 const ti = input.tool_input || {}
 // paths a file tool might touch: Read/Edit/Write use file_path, NotebookEdit notebook_path,
 // Grep/Glob use path. Bash is covered by the sandbox; tools with no path yield [] and pass.
