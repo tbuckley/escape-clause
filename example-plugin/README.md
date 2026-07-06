@@ -120,6 +120,34 @@ that *anyone who can reply through the channel can approve or deny tool use*, so
 capability may only be declared on a channel that authenticates the approver. The broker's
 UI is bearer-token-gated; fakechat has no auth, so it must never declare it.
 
+### Relay mode (`CLAWMINI_RELAY`)
+
+Set it in the broker's `.mcp.json` entry:
+
+```json
+{ "mcpServers": { "broker": {
+  "command": "node", "args": ["…/broker.mjs"],
+  "env": { "CLAWMINI_RELAY": "deny" }
+} } }
+```
+
+| Mode | Behavior |
+|---|---|
+| `forward` (default) | Surface each relayed prompt in the UI queue and wait for a human verdict. Best for the demo / when you want to review. |
+| `deny` | **Auto-deny every relayed prompt immediately** — no human, no UI ticket, just an `audit.log` entry. |
+| `off` | Don't declare the relay capability at all; prompts stay in the terminal (pre-relay behavior). |
+
+**`deny` is the "just shut down the domain prompts" mode.** The premise: your
+`settings.json` already auto-allows every tool you care about (`Bash`, `Read`, `Edit`, …
+and the broker/fakechat MCP tools), so *anything that still reaches the relay is by
+definition not pre-approved* — most commonly the `SandboxNetworkAccess` prompt from a
+sandboxed command hitting an off-allowlist domain. Auto-denying it is the settings-only
+equivalent of the driver's `canUseTool` instant-deny: the command fails closed with no
+prompt (the terminal dialog may flash and auto-close as the broker's deny wins the race).
+It flips the plugin's "per-host network policy / instant deny ✗" in the table below to a ✓.
+Note this denies **anything** unapproved that reaches the relay, so your `settings.json`
+allow-list must be complete — a tool you forgot to allow gets silently denied, not prompted.
+
 > **Manual check (the one piece the automated audit can't reach).** Permission relay only
 > fires in an **interactive** session — headless `-p` disables terminal-input prompts
 > entirely, so the audit (which drives `claude -p`) can't exercise it. The broker's side of

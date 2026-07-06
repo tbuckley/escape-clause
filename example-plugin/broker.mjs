@@ -28,22 +28,30 @@ import { startServer } from './server.mjs'
 const PORT = Number(process.env.CLAWMINI_UI_PORT || 8790)
 const log = (m) => { const s = `[${new Date().toISOString().slice(11, 19)}] ${m}\n`; appendFileSync(join(DIR, 'broker.log'), s); process.stderr.write(s) }
 
+// How the broker handles a permission prompt Claude Code relays to it (CLAWMINI_RELAY):
+//   forward (default) — surface it in the UI queue and wait for a human verdict
+//   deny              — auto-deny it immediately, no human, no UI ticket (just audit-logged).
+//                       Use this when settings.json already auto-allows everything legitimate:
+//                       anything reaching the relay is by definition NOT pre-approved, so denying
+//                       it is the settings-only equivalent of the driver's canUseTool deny — it
+//                       shuts down the SandboxNetworkAccess (off-allowlist domain) prompts silently.
+//   off               — don't declare the relay capability at all; prompts stay in the terminal.
+const RELAY = ['forward', 'deny', 'off'].includes((process.env.CLAWMINI_RELAY || '').toLowerCase())
+  ? process.env.CLAWMINI_RELAY.toLowerCase() : 'forward'
+
 seedPolicies()
+
+const experimental = { 'claude/channel': {} } // channel spec -> lets the broker PUSH notifications
+if (RELAY !== 'off') experimental['claude/channel/permission'] = {} // permission relay (see RELAY above)
 
 const mcp = new Server(
   { name: 'broker', version: '0.1.0' },
   {
-    capabilities: {
-      experimental: {
-        'claude/channel': {},            // channel spec -> lets the broker PUSH notifications
-        'claude/channel/permission': {}, // permission relay -> Claude Code forwards its OWN tool-approval
-        //                                   prompts (Bash/Write/Edit, and network egress) here so the human
-        //                                   can answer them from the broker UI. Safe to declare only because
-        //                                   this channel authenticates the approver (bearer token on 8790);
-        //                                   fakechat, which has no auth, must NOT declare this.
-      },
-      tools: {},
-    },
+    // claude/channel/permission (added above unless RELAY=off) is what makes Claude Code forward
+    // its OWN tool-approval prompts (Bash/Write/Edit, and the SandboxNetworkAccess egress prompt)
+    // to the broker. Safe to declare only because this channel authenticates the approver (bearer
+    // token on 8790); fakechat, which has no auth, must NOT declare it.
+    capabilities: { experimental, tools: {} },
     instructions:
       'The broker lets you act OUTSIDE your sandbox (network/host), which is otherwise blocked. ' +
       'PREFER NAMED POLICIES over raw commands: list_policies() shows what exists; check_policy(policy, args) dry-runs the decision. ' +
@@ -287,6 +295,17 @@ const PermissionRequestSchema = z.object({
   }),
 })
 mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
+  if (RELAY === 'deny') {
+    // Auto-deny without a human: settings.json is expected to auto-allow everything legitimate,
+    // so anything reaching the relay is unapproved. Instant deny, audit-logged, no UI clutter.
+    void mcp.notification({
+      method: 'notifications/claude/channel/permission',
+      params: { request_id: params.request_id, behavior: 'deny' },
+    })
+    audit('permission_auto_denied', { request_id: params.request_id, tool_name: params.tool_name })
+    log(`PERMISSION ${params.tool_name} (${params.request_id}) AUTO-DENIED [relay=deny]`)
+    return
+  }
   const t = {
     ticket: `PERM-${params.request_id}`,
     request_id: params.request_id,
@@ -308,4 +327,4 @@ mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
 
 const ui = startServer({ port: PORT, resolveTicket, log })
 await mcp.connect(new StdioServerTransport())
-log(`broker up (stdio MCP + channel + permission relay). store: ${DIR}`)
+log(`broker up (stdio MCP + channel, relay=${RELAY}). store: ${DIR}`)
