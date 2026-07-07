@@ -127,6 +127,7 @@ function readBody(req) {
 // the password once at login. Without a session the page shows the login form.
 const PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="only light"><meta name="theme-color" content="#16181c">
 <title>Escape Clause broker — approvals</title>
 <style>
   body{font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;background:#f4f5f7;color:#1b1e22}
