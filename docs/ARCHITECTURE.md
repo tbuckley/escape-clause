@@ -14,8 +14,8 @@ Two commands with one job each:
    `.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json` — from the
    protected install, and drops a `CLAUDE.md` if the workspace has none.
 2. **`escape-clause.sh launch <workspace>` runs claude** — it prints and execs
-   `claude --channels plugin:fakechat@claude-plugins-official
-   --dangerously-load-development-channels server:broker` in the workspace. First,
+   `claude --dangerously-load-development-channels server:broker` in the workspace
+   (plus `--channels $ESCAPE_CLAUSE_CHANNELS` if you opted into a chat channel). First,
    though, it verifies the stamped config is byte-identical to what `init` would write
    right now; if not — a stale init, changed `ESCAPE_CLAUSE_*` env, or tampering — it
    refuses and tells you to inspect and re-run `init`. Tampering from inside the box
@@ -24,9 +24,18 @@ Two commands with one job each:
    defense. A tampered config is never what actually launches, and nothing is
    rewritten behind your back.
 
-- `--channels plugin:fakechat@...` — the chat surface. fakechat is a plugin channel: it
-  ships its own MCP server that serves the web UI on `localhost:8787` and delivers the
-  reply tool.
+- **The chat surface is yours to pick** — the launcher doesn't bundle one. Chat in the
+  launch terminal, hand the session to claude.ai or the Claude app with
+  `/remote-control` ([remote control docs](https://code.claude.com/docs/en/remote-control)),
+  or connect a channel plugin — Telegram, Discord, iMessage, fakechat
+  ([channels docs](https://code.claude.com/docs/en/channels)). For a channel, set two
+  env vars before `init`/`launch`: `ESCAPE_CLAUSE_CHANNELS` (the `--channels` spec,
+  e.g. `plugin:fakechat@claude-plugins-official`; space-separate several) and
+  `ESCAPE_CLAUSE_CHANNEL_TOOLS` (comma-separated permission entries for the channels'
+  reply tools, e.g. `mcp__plugin_fakechat_fakechat` — stamped into the allow-list so
+  replies aren't auto-denied by the `deny` relay mode). If you chat over remote control
+  or a channel, make the approval UI reachable from your device — see
+  [Sharing a request with a remote user](#sharing-a-request-with-a-remote-user).
 - `--dangerously-load-development-channels server:broker` — promotes the broker MCP
   server to a channel so it can push notifications (custom channels need this flag
   during the research preview). The broker itself loads from the stamped `.mcp.json`
@@ -46,22 +55,34 @@ sandboxed (and `HTTP_PROXY` should point at the deny-all proxy on `:8791`).
 Pushing an async approve/reject notification into a running session needs the channel
 spec, and a *custom* channel plugin **does not activate in headless (`-p`) mode** — its
 notifications are silently dropped (verified). In an interactive session it does
-activate and deliver, so the full loop works: chat in via fakechat → agent files a
-broker request → you approve → the broker pushes a `<channel source="broker">`
-notification → the agent wakes and acts on it. (An earlier variant drove headless claude
+activate and deliver, so the full loop works: chat in (terminal, remote control, or a
+channel) → agent files a broker request → you approve → the broker pushes a
+`<channel source="broker">` notification → the agent wakes and acts on it. (An earlier variant drove headless claude
 via the Agent SDK's input stream — see git history for that pattern.)
 
 ## Sharing a request with a remote user
 
 When the agent files a ticket it gets back a credential-free `url` (e.g.
-`http://127.0.0.1:8790/?req=REQ-2`) and is told to relay it, so a user chatting over
-fakechat gets a link straight to that request, which the UI scrolls to and highlights.
-On a device that hasn't signed in yet, the link lands on the login form first — enter
-the password once and the request is right there. If the UI is reachable off-box
-(Tailscale, a tunnel, a domain), set **`ESCAPE_CLAUSE_UI_URL`** when you run `init` so
-shared links resolve for the remote user; it defaults to `http://127.0.0.1:<port>`. The shared
-URL is deliberately credential-free — the sandboxed agent never receives the password or
-a session, only a pointer to the request.
+`http://127.0.0.1:8790/?req=REQ-2`) and is told to relay it, so a user chatting
+remotely — over remote control or a channel — gets a link straight to that request,
+which the UI scrolls to and highlights. On a device that hasn't signed in yet, the link
+lands on the login form first — enter the password once and the request is right there.
+
+A localhost link only resolves on the machine running the broker, and the UI server
+deliberately binds to `127.0.0.1` only — never `0.0.0.0` — so no `ESCAPE_CLAUSE_*`
+setting exposes it to the network. Remote chat therefore needs two things:
+
+1. **Forward traffic to the loopback port.** [Tailscale](https://tailscale.com) is the
+   recommended way: `tailscale serve --bg 8790` proxies
+   `https://<machine>.<tailnet>.ts.net` (tailnet-only, TLS included) to
+   `127.0.0.1:8790`. An SSH tunnel or any reverse proxy you trust also works.
+2. **Set `ESCAPE_CLAUSE_UI_URL`** to that reachable address (e.g.
+   `https://<machine>.<tailnet>.ts.net`) when you run `init`, so shared links carry it;
+   it defaults to `http://127.0.0.1:<port>`. This changes only the URL written into
+   links and pages — not what the server listens on.
+
+The shared URL is deliberately credential-free — the sandboxed agent never receives the
+password or a session, only a pointer to the request.
 
 ## Permission relay — answer the terminal's own prompts from the UI
 
@@ -95,11 +116,11 @@ relay is by definition not pre-approved and gets denied without a human. That me
 allow-list must actually be complete — a tool you forgot to allow gets silently denied,
 not prompted.
 
-The broker is the right home for this capability and **fakechat is not**: the docs warn
-that anyone who can reply through a permission-relaying channel can approve or deny tool
-use, so it may only be declared on a channel that authenticates the approver. The
-broker's UI is behind a password login; fakechat has no auth, so it must never declare
-it.
+The broker is the right home for this capability and **a chat channel is not**: the
+docs warn that anyone who can reply through a permission-relaying channel can approve or
+deny tool use, so it may only be declared on a channel that authenticates the approver.
+The broker's UI is behind a password login; a chat surface like fakechat has no auth, so
+it must never declare it.
 
 Note the relay does **not** cover the `SandboxNetworkAccess` prompt (a sandboxed command
 reaching an off-allowlist domain) — that never relays in any mode (verified). Killing

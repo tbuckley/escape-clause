@@ -11,8 +11,8 @@
 # ~/.escape-clause, which the sandbox denyRead + guard hook already deny to the agent.
 #
 # No magic: `init` writes the workspace config (.claude/settings.json, settings.local.json,
-# .mcp.json — plain files you can read) and `launch` just runs `claude` with two flags, after
-# VERIFYING the config still matches what `init` would write. It never rewrites anything: if
+# .mcp.json — plain files you can read) and `launch` just runs `claude` (it prints the exact
+# command first), after VERIFYING the config still matches what `init` would write. It never rewrites anything: if
 # the config drifted (a stale init, different ESCAPE_CLAUSE_* env than at init, or tampering
 # — file tools are guard-blocked and sandboxed bash is denyWrite-blocked on these paths, so
 # drift should not happen from inside the box), launch refuses and tells you to re-run
@@ -69,6 +69,16 @@ check_ws() {
 stamp() {
   TGT="$1"
   mkdir -p "$TGT/.claude"
+  # Chat channels are opt-in: if you connect one (ESCAPE_CLAUSE_CHANNELS at launch), its
+  # reply tool must be pre-allowed here or it hits the permission prompt (auto-denied when
+  # ESCAPE_CLAUSE_RELAY=deny, the stamped default). ESCAPE_CLAUSE_CHANNEL_TOOLS is a
+  # comma-separated list of permission entries, e.g. mcp__plugin_fakechat_fakechat.
+  ALLOW='"Bash", "Read", "Edit", "Write", "Glob", "Grep", "mcp__broker"'
+  if [ -n "${ESCAPE_CLAUSE_CHANNEL_TOOLS:-}" ]; then
+    for t in $(printf '%s' "$ESCAPE_CLAUSE_CHANNEL_TOOLS" | tr ',' ' '); do
+      ALLOW="$ALLOW, \"$t\""
+    done
+  fi
   # Sandbox on, egress routed to the deny-all proxy, escape hatch closed, crown jewels +
   # the broker's dir unreadable, and this launch config itself unwritable to sandboxed
   # bash (denyWrite — the guard hook only covers file tools). The guard hook is loaded
@@ -79,7 +89,7 @@ stamp() {
   "enableAllProjectMcpServers": true,
   "permissions": {
     "defaultMode": "default",
-    "allow": ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "mcp__broker", "mcp__plugin_fakechat_fakechat"],
+    "allow": [$ALLOW],
     "deny": [
       "WebFetch", "WebSearch",
       "mcp__claude_ai_Gmail", "mcp__claude_ai_Google_Calendar", "mcp__claude_ai_Google_Drive"
@@ -168,21 +178,30 @@ launch() {
     }
   done
   rm -rf "$TMP"
+  CMD="claude --dangerously-load-development-channels server:broker"
+  [ -n "${ESCAPE_CLAUSE_CHANNELS:-}" ] && \
+    CMD="claude --channels $ESCAPE_CLAUSE_CHANNELS --dangerously-load-development-channels server:broker"
   cat <<EOF
 workspace:   $WS  (config verified against $APP)
 approval UI: http://127.0.0.1:${ESCAPE_CLAUSE_UI_PORT:-8790}  — password in $BASE/secrets/password
 
+Talk to the agent right here in this terminal, from claude.ai or the Claude app
+(run /remote-control inside the session), or over a chat channel (set
+ESCAPE_CLAUSE_CHANNELS — see the README). Chatting remotely — remote control or a
+channel? The UI binds to localhost only: expose it on your tailnet with
+'tailscale serve --bg ${ESCAPE_CLAUSE_UI_PORT:-8790}' and re-run init with
+ESCAPE_CLAUSE_UI_URL set to that address so approval links reach your device.
+
 Launching claude — this is the entire command, run it yourself any time:
 
   cd $WS
-  claude --channels plugin:fakechat@claude-plugins-official \\
-      --dangerously-load-development-channels server:broker
+  $CMD
 
 EOF
   cd "$WS"
-  exec claude \
-    --channels plugin:fakechat@claude-plugins-official \
-    --dangerously-load-development-channels server:broker
+  # word splitting on $CMD is intentional: it is exactly the printed command
+  # shellcheck disable=SC2086
+  exec $CMD
 }
 
 case "${1:-}" in

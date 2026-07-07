@@ -13,7 +13,7 @@ into the session so the agent keeps working without polling.
 ![The approval queue: each request shows the exact command, an AI risk summary, and the agent's justification — quarantined as an untrusted claim.](docs/img/approval-ui.png)
 
 ```
-you (chat UI) ──▶ agent (interactive claude, sandboxed: no network/host)
+you (terminal, remote control, or a channel) ──▶ agent (interactive claude, sandboxed: no network/host)
                      │ needs something outside the box
                      ▼
                broker: files ticket REQ-N ──▶ AI risk summary
@@ -31,10 +31,9 @@ run yourself, and a launcher that refuses drifted config instead of silently fix
 
 ## Getting started
 
-You need [Claude Code](https://code.claude.com) signed in, Node.js **20+** with npm, and
-the fakechat plugin — install it once from inside any `claude` session:
-`/plugin install fakechat@claude-plugins-official`. Optionally set `ANTHROPIC_API_KEY`
-for AI risk summaries on tickets (without it you review from the raw facts).
+You need [Claude Code](https://code.claude.com) signed in and Node.js **20+** with npm.
+Optionally set `ANTHROPIC_API_KEY` for AI risk summaries on tickets (without it you
+review from the raw facts).
 
 **1. Install the broker.** It lands in `~/.escape-clause/app` — deliberately outside the
 agent's reach — and prints the approval-UI password:
@@ -58,19 +57,52 @@ when asked; `Channels: server:broker` on startup confirms the broker is live.
 
 ```bash
 cd ~/escape-clause-workspace
-claude --channels plugin:fakechat@claude-plugins-official \
-    --dangerously-load-development-channels server:broker
+claude --dangerously-load-development-channels server:broker
 ```
 
 Or run `~/.escape-clause/app/escape-clause.sh launch ~/escape-clause-workspace` — the
 same command, but it first verifies the stamped config still matches what `init` would
 write, and refuses to start if it drifted.
 
-**4. Chat** at http://localhost:8787. When the agent needs anything outside the box, it
-files a request and sends you a link into the approval UI
-(http://127.0.0.1:8790, password from step 1) showing the exact command, the AI risk
-summary, and the agent's justification. **Approve once** runs that snapshot on the host
-and pushes the output back into the session; **Deny** sends your message back instead.
+**4. Chat.** Three ways to talk to the sandboxed agent:
+
+- **Claude chat** — just type in the terminal you launched in.
+- **Remote control** — run `/remote-control` in the session, then continue it from
+  [claude.ai](https://claude.ai/code) or the Claude mobile app
+  ([docs](https://code.claude.com/docs/en/remote-control)).
+- **Channels** — connect a chat surface like Telegram, Discord, iMessage, or the local
+  fakechat web UI ([docs](https://code.claude.com/docs/en/channels)). Install the
+  plugin once from inside any `claude` session (e.g.
+  `/plugin install fakechat@claude-plugins-official`), then tell the launcher which
+  channel to load and which reply tool to pre-allow, re-init, and launch:
+
+  ```bash
+  export ESCAPE_CLAUSE_CHANNELS=plugin:fakechat@claude-plugins-official
+  export ESCAPE_CLAUSE_CHANNEL_TOOLS=mcp__plugin_fakechat_fakechat
+  ~/.escape-clause/app/escape-clause.sh init ~/escape-clause-workspace
+  ~/.escape-clause/app/escape-clause.sh launch ~/escape-clause-workspace
+  ```
+
+> **Talking remotely?** Approval links point at `http://127.0.0.1:8790` — fine on the
+> machine running the broker, dead on your phone. The UI deliberately binds to
+> loopback only (never `0.0.0.0`), so if you chat over **remote control or a
+> channel**, set up [Tailscale](https://tailscale.com) and proxy the UI onto your
+> tailnet with [`tailscale serve`](https://tailscale.com/kb/1312/serve) (an SSH tunnel
+> also works):
+>
+> ```bash
+> tailscale serve --bg 8790     # → https://<machine>.<tailnet>.ts.net
+> ```
+>
+> Then run `init` (and `launch`) with
+> `ESCAPE_CLAUSE_UI_URL=https://<machine>.<tailnet>.ts.net` so the links the agent
+> shares resolve on your device.
+
+When the agent needs anything outside the box, it files a request and sends you a link
+into the approval UI (http://127.0.0.1:8790, password from step 1) showing the exact
+command, the AI risk summary, and the agent's justification. **Approve once** runs that
+snapshot on the host and pushes the output back into the session; **Deny** sends your
+message back instead.
 
 Things to try:
 
@@ -91,9 +123,9 @@ it takes a few minutes and consumes tokens:
 cd tests && npm install && node sandbox-audit.mjs
 ```
 
-If your first chat message ever vanishes after a relaunch, an orphaned fakechat is
-holding port 8787 — `lsof -ti :8787 | xargs kill` before launching. Details in
-[Troubleshooting](#troubleshooting).
+If you use the fakechat channel and your first chat message ever vanishes after a
+relaunch, an orphaned fakechat is holding port 8787 — `lsof -ti :8787 | xargs kill`
+before launching. Details in [Troubleshooting](#troubleshooting).
 
 ## What's in the box
 
@@ -114,8 +146,8 @@ holding port 8787 — `lsof -ti :8787 | xargs kill` before launching. Details in
 ## Stopping and uninstalling
 
 - **Stop a session**: exit `claude` in the launch terminal — the broker, its UIs, and
-  the proxies die with it. If a fakechat orphan lingers on 8787:
-  `lsof -ti :8787 | xargs kill`.
+  the proxies die with it. If you use the fakechat channel and an orphan lingers on
+  8787: `lsof -ti :8787 | xargs kill`.
 - **Uninstall**: `rm -rf ~/.escape-clause` removes the broker and all its state
   (tickets, policies, password, `audit.log`). A workspace stays a normal directory —
   delete its stamped `.claude/`, `.mcp.json`, and `CLAUDE.md` if you want it pristine.
@@ -123,6 +155,8 @@ holding port 8787 — `lsof -ti :8787 | xargs kill` before launching. Details in
 ## Troubleshooting
 
 ### fakechat swallows your first message after a relaunch
+
+(Only applies if you chat over the optional fakechat channel.)
 
 Symptom: you launch a session, open fakechat, send a message — the agent never sees it,
 and on refresh the fakechat server is gone.

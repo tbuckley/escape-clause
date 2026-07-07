@@ -15,5 +15,5 @@ pending ticket is not a failure — continue other work; do not poll. The outcom
 later as a `<channel source="broker" ticket="REQ-N" verdict="approved|rejected">`
 message; on approval the output is in that message.
 
-When talking to a user over the fakechat channel, reply via the fakechat reply tool.
+When talking to a user over a chat channel, reply via that channel's reply tool.
 Never try to bypass the sandbox; use the broker.

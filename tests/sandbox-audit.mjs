@@ -81,7 +81,7 @@ async function behaviorAudit() {
           if (['Read', 'Edit', 'Write', 'NotebookEdit'].includes(tool) && String(input?.file_path || '').startsWith(forbidden)) {
             return { behavior: 'deny', message: 'protected path' }
           }
-          if (tool.startsWith('mcp__') && !/__broker__|fakechat/i.test(tool)) return { behavior: 'deny', message: 'mcp disabled' }
+          if (tool.startsWith('mcp__') && !/__broker__|__plugin_/.test(tool)) return { behavior: 'deny', message: 'mcp disabled' } // broker + channel-plugin reply tools stay allowed
           return { behavior: 'allow', updatedInput: input }
         },
       },
