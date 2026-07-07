@@ -9,6 +9,7 @@ upgrade, since those can change sandbox behavior.
 
 ```bash
 cd tests
+npm install
 node sandbox-audit.mjs           # add --verbose to dump the probe transcript
 ```
 
