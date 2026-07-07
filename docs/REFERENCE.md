@@ -38,7 +38,7 @@ and `launch` with the same values set.
 |---|---|
 | `ESCAPE_CLAUSE_DIR` | Moves the protected install (default `~/.escape-clause`). |
 | `ESCAPE_CLAUSE_UI_PORT` | Approval-UI port (default `8790`). |
-| `ESCAPE_CLAUSE_UI_URL` | Public base URL for shared ticket links — set it to your Tailscale address when chatting over remote control or a channel (default `http://127.0.0.1:<port>`). |
+| `ESCAPE_CLAUSE_UI_URL` | Base URL written into shared ticket links (default `http://127.0.0.1:<port>`). Link text only — the server always binds loopback; expose it with e.g. `tailscale serve` and set this to that address. |
 | `ESCAPE_CLAUSE_PROXY_PORT` | Deny-all HTTP proxy port; SOCKS is always +1 (default `8791`). |
 | `ESCAPE_CLAUSE_RELAY` | Permission-relay mode: `forward`, `deny` (default), or `off`. |
 | `ESCAPE_CLAUSE_CHANNELS` | Optional `--channels` spec(s) for chat channel plugins, e.g. `plugin:fakechat@claude-plugins-official` (space-separate several). |

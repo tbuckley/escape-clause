@@ -68,13 +68,21 @@ remotely — over remote control or a channel — gets a link straight to that r
 which the UI scrolls to and highlights. On a device that hasn't signed in yet, the link
 lands on the login form first — enter the password once and the request is right there.
 
-A localhost link only resolves on the machine running the broker, so remote chat needs
-two things: make the UI reachable from your device — [Tailscale](https://tailscale.com)
-is the recommended way (a tunnel or a domain also works) — and set
-**`ESCAPE_CLAUSE_UI_URL`** (e.g. `http://<tailnet-address>:8790`) when you run `init`
-so shared links carry that address; it defaults to `http://127.0.0.1:<port>`. The shared
-URL is deliberately credential-free — the sandboxed agent never receives the password or
-a session, only a pointer to the request.
+A localhost link only resolves on the machine running the broker, and the UI server
+deliberately binds to `127.0.0.1` only — never `0.0.0.0` — so no `ESCAPE_CLAUSE_*`
+setting exposes it to the network. Remote chat therefore needs two things:
+
+1. **Forward traffic to the loopback port.** [Tailscale](https://tailscale.com) is the
+   recommended way: `tailscale serve --bg 8790` proxies
+   `https://<machine>.<tailnet>.ts.net` (tailnet-only, TLS included) to
+   `127.0.0.1:8790`. An SSH tunnel or any reverse proxy you trust also works.
+2. **Set `ESCAPE_CLAUSE_UI_URL`** to that reachable address (e.g.
+   `https://<machine>.<tailnet>.ts.net`) when you run `init`, so shared links carry it;
+   it defaults to `http://127.0.0.1:<port>`. This changes only the URL written into
+   links and pages — not what the server listens on.
+
+The shared URL is deliberately credential-free — the sandboxed agent never receives the
+password or a session, only a pointer to the request.
 
 ## Permission relay — answer the terminal's own prompts from the UI
 

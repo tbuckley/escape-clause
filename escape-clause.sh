@@ -188,8 +188,9 @@ approval UI: http://127.0.0.1:${ESCAPE_CLAUSE_UI_PORT:-8790}  — password in $B
 Talk to the agent right here in this terminal, from claude.ai or the Claude app
 (run /remote-control inside the session), or over a chat channel (set
 ESCAPE_CLAUSE_CHANNELS — see the README). Chatting remotely — remote control or a
-channel? Set up Tailscale so approval links reach your device, and re-run init with
-ESCAPE_CLAUSE_UI_URL pointing at the tailnet address.
+channel? The UI binds to localhost only: expose it on your tailnet with
+'tailscale serve --bg ${ESCAPE_CLAUSE_UI_PORT:-8790}' and re-run init with
+ESCAPE_CLAUSE_UI_URL set to that address so approval links reach your device.
 
 Launching claude — this is the entire command, run it yourself any time:
 

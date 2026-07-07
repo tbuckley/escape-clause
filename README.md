@@ -84,11 +84,19 @@ write, and refuses to start if it drifted.
   ```
 
 > **Talking remotely?** Approval links point at `http://127.0.0.1:8790` — fine on the
-> machine running the broker, dead on your phone. If you chat over **remote control or
-> a channel**, set up [Tailscale](https://tailscale.com) (or a similar tunnel) so your
-> device can reach the approval UI, and run `init` (and `launch`) with
-> `ESCAPE_CLAUSE_UI_URL=http://<tailnet-address>:8790` so the links the agent shares
-> resolve where you are.
+> machine running the broker, dead on your phone. The UI deliberately binds to
+> loopback only (never `0.0.0.0`), so if you chat over **remote control or a
+> channel**, set up [Tailscale](https://tailscale.com) and proxy the UI onto your
+> tailnet with [`tailscale serve`](https://tailscale.com/kb/1312/serve) (an SSH tunnel
+> also works):
+>
+> ```bash
+> tailscale serve --bg 8790     # → https://<machine>.<tailnet>.ts.net
+> ```
+>
+> Then run `init` (and `launch`) with
+> `ESCAPE_CLAUSE_UI_URL=https://<machine>.<tailnet>.ts.net` so the links the agent
+> shares resolve on your device.
 
 When the agent needs anything outside the box, it files a request and sends you a link
 into the approval UI (http://127.0.0.1:8790, password from step 1) showing the exact
