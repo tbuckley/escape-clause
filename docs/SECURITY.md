@@ -55,12 +55,14 @@ Three independent layers:
   `permissions.deny`). MCP servers run outside the sandbox, so each connected one is a
   network + private-data path. The stronger posture is an allowlist
   (`--strict-mcp-config --mcp-config .mcp.json`, loading only the vetted broker) — but
-  that flag also strips **plugin-provided** MCP servers, and fakechat *is* one, so
-  strict mode disables the chat surface entirely. The denylist is genuinely weaker: you
-  must name each dangerous server, and one connected later isn't denied by default.
-  **Check `/mcp` for anything unexpected and deny it.** (fakechat itself won't appear
-  in `/mcp` — channels are listed separately, confirmed by the startup `Channels:`
-  line. If you don't need a plugin chat surface, prefer the strict allowlist.)
+  that flag also strips **plugin-provided** MCP servers, and channel plugins (fakechat,
+  Telegram, Discord, …) deliver their reply tools as one, so strict mode disables any
+  plugin chat surface. The denylist is genuinely weaker: you must name each dangerous
+  server, and one connected later isn't denied by default. **Check `/mcp` for anything
+  unexpected and deny it.** (Channel plugins themselves won't appear in `/mcp` —
+  channels are listed separately, confirmed by the startup `Channels:` line. If you
+  chat in the terminal or over remote control — no channel plugin — prefer the strict
+  allowlist.)
 - **Hash pinning** makes policy review meaningful: policy bytes live only in the
   private store, invoked as `execve(script, args)` — never a shell. A workspace copy the
   agent edits after approval is irrelevant, and an *update* re-enters review with an

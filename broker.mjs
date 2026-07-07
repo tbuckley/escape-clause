@@ -64,8 +64,8 @@ const mcp = new Server(
     // claude/channel/permission (added above unless RELAY=off) is what makes Claude Code forward
     // its OWN tool-approval prompts (Bash/Write/Edit class; NOT the SandboxNetworkAccess egress
     // prompt, which never relays) to the broker. Safe to declare only because this channel
-    // authenticates the approver (bearer token on 8790); fakechat, which has no auth, must NOT
-    // declare it.
+    // authenticates the approver (bearer token on 8790); an unauthenticated chat channel
+    // (fakechat, for one) must NOT declare it.
     capabilities: { experimental, tools: {} },
     instructions:
       'The broker lets you act OUTSIDE your sandbox (network/host), which is otherwise blocked. ' +
