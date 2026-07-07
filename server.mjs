@@ -130,7 +130,7 @@ const PAGE = `<!doctype html>
 <title>Escape Clause broker — approvals</title>
 <style>
   body{font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;background:#f4f5f7;color:#1b1e22}
-  header{background:#16181c;color:#fff;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+  header{background:#16181c;color:#fff;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
   header h1{font-size:15px;margin:0;font-weight:600}
   #authstate{font-size:12px;color:#e8b84d}
   #authstate button{background:none;border:1px solid #555;color:#ccc;font-size:11px;padding:2px 10px}
@@ -165,6 +165,19 @@ const PAGE = `<!doctype html>
   #login form{display:flex;gap:8px}
   #login button{background:#16181c;color:#fff}
   #loginerr{color:#b3261e;font-size:13px;margin-top:10px;min-height:1em}
+  @media (max-width:600px){
+    header{padding:10px 14px}
+    header h1{font-size:14px}
+    main{margin:14px auto 44px;padding:0 10px}
+    .card{padding:12px;border-radius:8px}
+    pre{font-size:12px;padding:8px 9px}
+    input[type=text],input[type=password]{font-size:16px} /* <16px triggers iOS focus-zoom */
+    .actions button{flex:1;min-height:44px}
+    .actions input[type=text]{flex-basis:100%}
+    #login{margin:24px 12px;padding:18px 16px}
+    #login form{flex-wrap:wrap}
+    #login button{flex:1;min-height:44px}
+  }
 </style></head>
 <body>
 <header><h1>Escape Clause broker — approval queue</h1><div id="authstate"></div></header>
