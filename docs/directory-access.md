@@ -168,14 +168,23 @@ redirect on next install).
   the session as root, system-wide vectors (`/etc`, `/Library/LaunchDaemons`,
   `/etc/cron.d`, …) are writable through file tools and all bets are off. Don't run
   this as root.
-- **Persistence by command, not path.** `crontab -`, `launchctl bootstrap`, `at`,
-  `systemctl --user` register persistence without writing a watched path directly.
-  They run *inside* the sandbox — no network, workspace-only writes — and the OS layer
-  constrains what they can reach, but their kernel/service interfaces aren't
-  path-deny-able. The floor removes the durable file-drop vectors; treat odd service
-  commands in transcripts as red flags, and prefer `strict`/`paranoid` when the
-  workload doesn't need them (the tests in `tests/` don't currently probe these — this
-  is a known, documented gap).
+- **Persistence by command, not path.** Two distinct cases. *File-backed* mechanisms
+  (`crontab -`, `at`) rely on a setuid helper writing a spool under `/var` — inside the
+  sandbox that should simply fail: Linux's bubblewrap runs with `no_new_privs`, so
+  setuid confers nothing and the spool write is denied like any other out-of-workspace
+  write; macOS Seatbelt is inherited across `exec` (setuid included) and denies it too.
+  *IPC-based* mechanisms (`launchctl bootstrap`, `systemctl --user`,
+  `systemd-run --user`) are the real residual risk: they write **no protected path** —
+  the plist/unit can sit in the writable workspace, and the request is a Mach/D-Bus
+  message to `launchd`/`systemd`, which run *outside* the sandbox and would spawn the
+  payload unsandboxed. Filesystem rules never see a deniable path; what stands in the
+  way is the sandbox's IPC policy (Seatbelt `mach-lookup` rules, whether the D-Bus
+  socket is mapped into the namespace), which the tests in `tests/` don't currently
+  probe — a known, documented gap. (A workspace-plist `bootstrap` doesn't itself
+  survive reboot — durable boot persistence still needs the blocked `LaunchAgents`
+  drop — but one successful call is immediate unsandboxed execution, which can then
+  install persistence on its own.) Treat service-management commands in transcripts as
+  red flags.
 - **The sandbox's own temp dir is shared ground.** `/tmp` is writable by bash and (by
   design) by file tools; anything else on the machine writing world-readable files to
   `/tmp` is visible to the agent even under `paranoid`.
