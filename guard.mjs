@@ -8,17 +8,35 @@
 // and future (the settings-based equivalent of the driver's canUseTool). Tools with no
 // path (Bash, MCP, WebFetch, ...) simply fall through untouched.
 //
+// The guard enforces three layers, checked in order:
+//   1. FLOOR — hardcoded here, applies always, even with no policy file: crown-jewel
+//      credentials (full deny) and host persistence vectors (write deny — LaunchAgents,
+//      shell rc files, autostart, systemd user units, ~/.local/bin, git config, ~/.claude).
+//      File tools run UNSANDBOXED, so without this a prompt-injected agent could Write a
+//      launchd plist or append to ~/.bashrc and have code run OUTSIDE the sandbox at the
+//      user's next login. (Sandboxed bash can't: its writes are workspace-only.)
+//   2. POLICY — extra denyRead/denyWrite paths stamped by `init` into
+//      .claude/escape-clause-policy.json (from ESCAPE_CLAUSE_DENY_READ/_DENY_WRITE).
+//   3. SCOPE — the profile's read fence (readScope in the policy file):
+//        "home":      nothing under ~ is touchable except the workspace + allowRead.
+//        "workspace": only the workspace, allowRead, tmp, and system toolchain paths
+//                     (/usr, /opt, /bin, ...) are touchable at all.
+//      allowRead carve-outs never override layers 1–2.
+//
 // Path checks resolve symlinks and `..` first (realpath): the raw string a tool is handed
 // can disguise a protected target — `./link` -> ~/.ssh, or workspace/../../.ssh — so a
 // literal startsWith() is bypassable. We compare REAL paths on both sides.
 //
-// Wired in settings.json under hooks.PreToolUse. Denies win over allow rules and are not
-// bypassable by permission mode.
-import { readFileSync, realpathSync } from 'node:fs'
+// Wired in settings.json under hooks.PreToolUse with `|| exit 2` so it fails CLOSED: a
+// missing/crashed guard (including a corrupt policy file — JSON.parse throws uncaught on
+// purpose) blocks the tool call instead of letting it through. Denies win over allow
+// rules and are not bypassable by permission mode.
+import { readFileSync, realpathSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve, dirname, basename } from 'node:path'
 
-const expand = (p) => (p && p.startsWith('~') ? join(homedir(), p.slice(1)) : p)
+const HOME = homedir()
+const expand = (p) => (p && p.startsWith('~') ? join(HOME, p.slice(1)) : p)
 
 // Resolve to a real, absolute path: expand ~, collapse `..`, and follow symlinks. If the
 // path doesn't exist yet (e.g. a Write to a new file), realpath the longest existing
@@ -35,6 +53,7 @@ function realish(p) {
     tail.push(basename(dir))
   }
 }
+const under = (p, roots) => roots.some((x) => p === x || p.startsWith(x + '/'))
 
 let input = {}
 try { input = JSON.parse(readFileSync(0, 'utf8')) } catch {}
@@ -45,23 +64,92 @@ try { input = JSON.parse(readFileSync(0, 'utf8')) } catch {}
 // an agent would swap in its own broker or drop the sandbox on the NEXT launch. (Sandboxed
 // bash is covered separately by sandbox.filesystem.denyWrite on the same paths, and
 // `launch` refuses to run a config that no longer matches what `init` writes.)
+// ~/.claude.json and ~/.claude/.credentials.json hold the user's Claude Code credentials,
+// account config, and history — same class as ~/.ssh, so same full deny.
 const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd || ''
-const PROTECTED = ['.ssh', '.aws', '.gnupg', '.config/gcloud', '.escape-clause']
-  .map((p) => join(homedir(), p))
+const FLOOR_FULL = ['.ssh', '.aws', '.gnupg', '.config/gcloud', '.escape-clause',
+  '.claude.json', '.claude.json.backup', '.claude/.credentials.json']
+  .map((p) => join(HOME, p))
   .concat(projectDir ? [join(projectDir, '.claude'), join(projectDir, '.mcp.json')] : [])
   .map(realish)
-const isProtected = (p) => { const a = realish(p); return !!a && PROTECTED.some((x) => a === x || a.startsWith(x + '/')) }
+
+// Host persistence vectors — a write here means the user's own account runs
+// attacker-chosen code OUTSIDE the sandbox later: next boot/login (launchd, autostart,
+// systemd), next shell (rc files), next command (PATH shadowing), next `git` call
+// (core.pager, hooks), next `claude` session (user-level hooks run unsandboxed).
+// Write-denied on every profile; both OSes' lists are enforced everywhere since a
+// missing path costs nothing on the other OS.
+const FLOOR_WRITE = [
+  'Library/LaunchAgents', 'Library/LaunchDaemons',                          // macOS launchd
+  '.config/autostart', '.config/systemd/user', '.local/share/systemd/user', // Linux login/systemd
+  '.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.profile',    // sh/bash rc
+  '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.zlogout', '.config/fish',  // zsh/fish rc
+  '.local/bin', 'bin',                                                      // PATH hijack
+  '.gitconfig', '.config/git',                                              // git hooks/aliases/pager
+  '.claude',                                                                // user-level Claude Code hooks
+].map((p) => join(HOME, p))
+  // package-manager bin dirs are commonly USER-writable on macOS (Homebrew) — shadowing
+  // a binary there is the same PATH hijack as ~/.local/bin
+  .concat(['/usr/local/bin', '/usr/local/sbin', '/opt/homebrew/bin', '/opt/homebrew/sbin'])
+  .map(realish)
+
+// Optional stamped policy (extra deny paths + the profile's read fence). Missing file ->
+// floor-only (bare and pre-profile workspaces keep working); corrupt file -> JSON.parse
+// throws -> non-zero exit -> the `|| exit 2` wiring blocks the call (fail closed).
+let policy = { readScope: 'none', denyRead: [], denyWrite: [], allowRead: [] }
+const policyPath = projectDir && join(projectDir, '.claude', 'escape-clause-policy.json')
+if (policyPath && existsSync(policyPath)) policy = { ...policy, ...JSON.parse(readFileSync(policyPath, 'utf8')) }
+const DENY_READ = (policy.denyRead || []).map(realish)
+const DENY_WRITE = (policy.denyWrite || []).map(realish)
+const ALLOW_READ = (policy.allowRead || []).map(realish)
+const WORKSPACE = projectDir ? realish(projectDir) : ''
+
+// Read fence for the "workspace" scope: toolchain + scratch stays visible so builds and
+// installed deps keep working; everything else (other repos, /etc, /var, other users'
+// homes) does not exist as far as file tools are concerned.
+const SCRATCH = ['/tmp', '/private/tmp', '/var/folders', '/private/var/folders', '/dev/null'].map(realish)
+const SYSTEM_READ = ['/usr', '/opt', '/bin', '/sbin', '/lib', '/lib32', '/lib64', '/libx32',
+  '/System', '/Library', '/Applications', '/nix', '/snap'].map(realish).concat(SCRATCH)
+
+// Read/Grep/Glob only observe; everything else path-bearing is classified as a write —
+// including tools this guard has never heard of. Over-classifying an unknown tool as a
+// write only ever denies MORE (write rules are a superset of read rules), so a future
+// file-mutating tool fails closed instead of slipping into the laxer read bucket.
+const READ_TOOLS = new Set(['Read', 'Grep', 'Glob'])
 const ti = input.tool_input || {}
 // paths a file tool might touch: Read/Edit/Write use file_path, NotebookEdit notebook_path,
 // Grep/Glob use path. Bash is covered by the sandbox; tools with no path yield [] and pass.
 const paths = [ti.file_path, ti.notebook_path, ti.path].filter(Boolean)
+const isWrite = !READ_TOOLS.has(input.tool_name)
 
-if (paths.some(isProtected)) {
+function denyReason(raw) {
+  const p = realish(raw)
+  if (!p) return null
+  if (under(p, FLOOR_FULL)) return `Protected path (${raw}) — not accessible to file tools.`
+  if (isWrite && under(p, FLOOR_WRITE)) return `Host persistence vector (${raw}) — file tools may not write to login/startup/PATH/git/Claude config.`
+  if (under(p, DENY_READ)) return `Deny-read path (${raw}) — blocked by this workspace's policy.`
+  if (isWrite && under(p, DENY_WRITE)) return `Deny-write path (${raw}) — blocked by this workspace's policy.`
+  const carvedOut = (WORKSPACE && under(p, [WORKSPACE])) || under(p, ALLOW_READ)
+  if (policy.readScope === 'home' && !carvedOut && under(p, [realish(HOME)]))
+    return `Home directory (${raw}) — this workspace's profile hides everything under ~ except the workspace.`
+  if (policy.readScope === 'workspace') {
+    // writes are tighter than reads: allowRead and SYSTEM_READ are read-only fences —
+    // never write targets (a write to a user-writable /opt/homebrew/bin is persistence)
+    if (isWrite && !(WORKSPACE && under(p, [WORKSPACE])) && !under(p, SCRATCH))
+      return `Outside the workspace (${raw}) — this workspace's profile limits file-tool writes to the workspace and tmp.`
+    if (!carvedOut && !under(p, SYSTEM_READ))
+      return `Outside the workspace (${raw}) — this workspace's profile limits file tools to the workspace, tmp, and system toolchain paths.`
+  }
+  return null
+}
+
+const reason = paths.map(denyReason).find(Boolean)
+if (reason) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
-      permissionDecisionReason: `Protected path (${paths.find(isProtected)}) — not accessible to file tools. Use the broker if you need something outside the sandbox.`,
+      permissionDecisionReason: `${reason} Use the broker if you need something outside the sandbox.`,
     },
   }))
 }

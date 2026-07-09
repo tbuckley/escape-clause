@@ -106,7 +106,10 @@ tighten or extend with:
 }
 ```
 
-Paths accept `/absolute`, `~/home-relative`, and `./project-relative` forms. Note the
+Paths accept `/absolute`, `~/home-relative`, and `./project-relative` forms. `allowRead`
+carves exceptions back out of a denied region — `"denyRead": ["~/"]` with
+`"allowRead": ["."]` hides your entire home directory from Bash while keeping a
+workspace that lives under it readable. Note the
 `denyWrite` on `./.claude` and `./.mcp.json`: the settings file lives *inside* the
 workspace the agent can write to, so an agent that can edit `.claude/settings.json`
 can turn its own sandbox off at the next session. Escape Clause additionally verifies
