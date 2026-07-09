@@ -184,7 +184,8 @@ redirect on next install).
   survive reboot — durable boot persistence still needs the blocked `LaunchAgents`
   drop — but one successful call is immediate unsandboxed execution, which can then
   install persistence on its own.) Treat service-management commands in transcripts as
-  red flags.
+  red flags. The behavioral probes that would confirm/deny this gap on each OS are
+  tracked in [tests/FUTURE-CHECKS.md](../tests/FUTURE-CHECKS.md).
 - **The sandbox's own temp dir is shared ground.** `/tmp` is writable by bash and (by
   design) by file tools; anything else on the machine writing world-readable files to
   `/tmp` is visible to the agent even under `paranoid`.
