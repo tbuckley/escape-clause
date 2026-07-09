@@ -126,15 +126,16 @@ function readBody(req) {
 // Auth is the HttpOnly session cookie — page JS never sees a credential; it only posts
 // the password once at login. Without a session the page shows the login form.
 const PAGE = `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="only light"><meta name="theme-color" content="#16181c">
 <title>Escape Clause broker — approvals</title>
 <style>
   body{font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;background:#f4f5f7;color:#1b1e22}
-  header{background:#16181c;color:#fff;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+  header{background:#16181c;color:#fff;padding:12px max(20px,env(safe-area-inset-right)) 12px max(20px,env(safe-area-inset-left));display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
   header h1{font-size:15px;margin:0;font-weight:600}
   #authstate{font-size:12px;color:#e8b84d}
   #authstate button{background:none;border:1px solid #555;color:#ccc;font-size:11px;padding:2px 10px}
-  main{max-width:900px;margin:20px auto 60px;padding:0 16px}
+  main{max-width:900px;margin:20px auto 60px;padding:0 max(16px,env(safe-area-inset-right)) env(safe-area-inset-bottom) max(16px,env(safe-area-inset-left))}
   h2{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:#5b6472;margin:26px 0 10px}
   .card{background:#fff;border:1px solid #dce0e6;border-radius:10px;padding:14px 16px;margin-bottom:12px;scroll-margin-top:16px}
   .card.resolved{opacity:.75}
@@ -165,6 +166,19 @@ const PAGE = `<!doctype html>
   #login form{display:flex;gap:8px}
   #login button{background:#16181c;color:#fff}
   #loginerr{color:#b3261e;font-size:13px;margin-top:10px;min-height:1em}
+  @media (max-width:600px){
+    header{padding:10px max(14px,env(safe-area-inset-right)) 10px max(14px,env(safe-area-inset-left))}
+    header h1{font-size:14px}
+    main{margin:14px auto 44px;padding:0 max(10px,env(safe-area-inset-right)) env(safe-area-inset-bottom) max(10px,env(safe-area-inset-left))}
+    .card{padding:12px;border-radius:8px}
+    pre{font-size:12px;padding:8px 9px}
+    input[type=text],input[type=password]{font-size:16px} /* <16px triggers iOS focus-zoom */
+    .actions button{flex:1;min-height:44px}
+    .actions input[type=text]{flex-basis:100%}
+    #login{margin:24px 12px;padding:18px 16px}
+    #login form{flex-wrap:wrap}
+    #login button{flex:1;min-height:44px}
+  }
 </style></head>
 <body>
 <header><h1>Escape Clause broker — approval queue</h1><div id="authstate"></div></header>
