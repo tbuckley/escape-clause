@@ -168,11 +168,18 @@ To use it:
 2. **Expose only the viewer** on your tailnet — never the agent's port:
 
    ```bash
-   tailscale serve --bg --https=8443 8793   # → https://<machine>.<tailnet>.ts.net:8443
+   tailscale serve --bg --https=8793 8793   # → https://<machine>.<tailnet>.ts.net:8793
    ```
 
+   Or just ask the agent: the seeded `tailscale-serve` policy (class `private-write`,
+   auto-runs) lets it run `on <viewer-port>` / `off <viewer-port>` / `status` itself —
+   but *only* for broker-published viewer ports, each on its own tailnet HTTPS port.
+   Raw app ports, the approval UI's `:443` mapping, and `tailscale funnel` (public
+   internet) are refused by the pinned script, so the agent can hand you a working
+   link without ever being able to expose an un-hardened page.
+
 3. **Enable Connection-Allowlist in Chrome** (until it ships by default in Chrome 152):
-   register `https://<machine>.<tailnet>.ts.net:8443` for the *Connection Allowlists*
+   register `https://<machine>.<tailnet>.ts.net:8793` for the *Connection Allowlists*
    trial at the [origin trials dashboard](https://developer.chrome.com/origintrials),
    and paste the token into `~/.escape-clause/secrets/origin-trial-tokens` (one per
    line — no restart needed). Browse agent apps in Chrome ≥ 148: without the trial

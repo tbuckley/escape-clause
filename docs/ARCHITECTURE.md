@@ -183,7 +183,7 @@ default a single `8793 → 3000`), each a reverse proxy that stamps every respon
   origin: both exfil paths (background fetch *and* the disguised link) die in the
   browser.
 - **`Origin-Trial: <your token(s)>`** — enables the trial before Chrome 152. Register
-  the exact origin you browse from (e.g. `https://<machine>.<tailnet>.ts.net:8443`) at
+  the exact origin you browse from (e.g. `https://<machine>.<tailnet>.ts.net:8793`) at
   the [origin trials dashboard](https://developer.chrome.com/origintrials) and paste
   the token(s), one per line, into `~/.escape-clause/secrets/origin-trial-tokens`
   (picked up per-request — no restart). Omitted if the file doesn't exist.
@@ -204,12 +204,23 @@ API)? `ESCAPE_CLAUSE_VIEWER_ALLOW=https://api.example.com` adds that origin to b
 the allowlist and the CSP.
 
 Like everything else, the viewer binds loopback only. Put it on your tailnet next to
-the approval UI:
+the approval UI (the convention is tailnet HTTPS port = viewer port, so URLs stay
+predictable and `:443` stays reserved for the UI):
 
 ```bash
 tailscale serve --bg 8790                 # approval UI  → https://<machine>.<tailnet>.ts.net
-tailscale serve --bg --https=8443 8793    # app viewer   → https://<machine>.<tailnet>.ts.net:8443
+tailscale serve --bg --https=8793 8793    # app viewer   → https://<machine>.<tailnet>.ts.net:8793
 ```
+
+You can also let the **agent** manage this step: the seeded `tailscale-serve` policy
+(class `private-write`, so it auto-runs) accepts `on <viewer-port>` /
+`off <viewer-port>` / `status`. Auto-run is earned, not assumed: the pinned script
+refuses every port not on the broker-published list (`~/.escape-clause/viewer-ports`,
+written by `viewer.mjs` at startup — never taken from the agent's arguments), so the
+agent cannot serve a raw app port (bypassing the headers), cannot touch the `:443`
+mapping your approval UI lives on, and never reaches `tailscale funnel` (public
+internet). What it can expose is tailnet-private *and* viewer-hardened — both halves
+of "private" — which is what justifies the `private-write` class.
 
 Two rules make the design hold:
 

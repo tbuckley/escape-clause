@@ -30,7 +30,9 @@
 // `tailscale serve` an agent port directly.
 import { createServer, request } from 'node:http'
 import { connect } from 'node:net'
-import { originTrialTokens } from './store.mjs'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { DIR, originTrialTokens } from './store.mjs'
 
 // Headers the upstream never gets to speak on: the security set we own (first block)
 // and hop-by-hop headers that must not be blindly copied through (second block).
@@ -60,6 +62,11 @@ export function startViewer({ basePort, appPorts, allowOrigins, log }) {
     if (tokens.length) h['origin-trial'] = tokens
     return h
   }
+
+  // Publish the viewer ports to the protected store: the seeded `tailscale-serve`
+  // policy (policies.mjs) refuses to serve any port not on this list, and the list
+  // must come from the broker, not from the agent's arguments.
+  writeFileSync(join(DIR, 'viewer-ports'), appPorts.map((_, i) => `${basePort + i}\n`).join(''))
 
   appPorts.forEach((appPort, i) => {
     const port = basePort + i

@@ -79,7 +79,11 @@ Three independent layers:
   [ARCHITECTURE.md](ARCHITECTURE.md#viewer-proxy--browsing-agent-built-web-apps-without-an-exfil-path)
   for the header set, the origin-trial token setup, and the residual gaps (browsers
   without Connection-Allowlist support enforce only the CSP layer, which can't block
-  plain link navigations).
+  plain link navigations). The seeded `tailscale-serve` policy lets the agent put a
+  viewer port on your tailnet itself, and stays auto-runnable only because the pinned
+  script refuses everything except broker-published viewer ports — an unconstrained
+  `tailscale serve` would let the agent expose un-hardened ports or shadow the
+  approval UI's `:443` mapping, and belongs in a human-reviewed class.
 - **The approval UI refuses cross-origin POSTs.** On one ts.net hostname the UI and
   the viewer are different *origins* but the same *site*, so `SameSite=Lax` alone
   would not keep an agent page's "simple" POST from riding the session cookie into

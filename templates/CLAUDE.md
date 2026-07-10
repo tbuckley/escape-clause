@@ -21,7 +21,10 @@ Connection-Allowlist/CSP headers, so in their browser the page can only talk to 
 own origin. Serve on the app port(s) listed in `.mcp.json` (`ESCAPE_CLAUSE_APP_PORTS`,
 default 3000) and keep every resource same-origin — CDN scripts, external fonts,
 third-party APIs, and off-origin links will simply be blocked in the user's browser.
-Vendor what you need into the app via the broker.
+Vendor what you need into the app via the broker. To put a viewer on the user's
+tailnet, use the `tailscale-serve` policy (`on <viewer-port>` / `off <viewer-port>` /
+`status`, auto-approved) — viewer ports are the app ports' counterparts starting at
+8793 — and share the URL it prints.
 
 When talking to a user over a chat channel, reply via that channel's reply tool.
 Never try to bypass the sandbox; use the broker.

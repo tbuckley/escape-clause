@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { join } from 'node:path'
-import { POLICY_DIR, sha256, audit } from './store.mjs'
+import { DIR, POLICY_DIR, sha256, audit } from './store.mjs'
 
 export const CLASSES = ['readonly', 'private-write', 'public-write', 'destructive']
 export const AUTO_CLASSES = new Set(['readonly', 'private-write'])
@@ -46,21 +46,58 @@ export function runPolicy(name, args = [], { cwd = process.cwd(), timeout = 1500
     return Promise.resolve({ exitCode: 126, stdout: '', stderr: 'policy store corrupt: script does not match pinned hash — refusing to run' })
   }
   return new Promise((res) => execFile(join(POLICY_DIR, `${name}.script`), args.map(String),
-    { cwd, timeout, env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin', HOME: process.env.HOME || '' } },
+    // ESCAPE_CLAUSE_DIR is the broker's own resolved store path (not agent input) — lets
+    // scripts find broker-published facts like viewer-ports without hardcoding $HOME.
+    { cwd, timeout, env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin', HOME: process.env.HOME || '', ESCAPE_CLAUSE_DIR: DIR } },
     (e, out, err) => res({ exitCode: e ? (typeof e.code === 'number' ? e.code : 1) : 0, stdout: String(out), stderr: String(err || (e && !out ? e.message : '')) })))
 }
 
-// Two seed policies so the demo shows both classes out of the box.
-export function seedPolicies() {
-  if (listPolicies().length) return
-  installPolicy({
+// Seed policies. Each missing name is (re)seeded at broker start, so upgrades deliver
+// new seeds to existing stores; an already-installed name is never touched (updates to
+// an existing policy always go through a reviewed registration ticket).
+const SEEDS = [
+  {
     name: 'host-info', class: 'readonly',
     description: 'Read-only host status: uname, root disk usage, uptime. No args.',
     script: '#!/bin/sh\nuname -a\ndf -h /\nuptime\n',
-  })
-  installPolicy({
+  },
+  {
     name: 'fetch-url', class: 'public-write',
     description: 'HTTP GET a URL from the host. Network egress is a potential exfil channel, so every run is human-reviewed. Args: <url>.',
     script: '#!/bin/sh\n[ -n "$1" ] || { echo "usage: fetch-url <url>" >&2; exit 2; }\nexec curl -sS --max-time 10 "$1"\n',
-  })
+  },
+  {
+    // Why this is safe to auto-run (private-write) when a raw `tailscale serve` would
+    // not be: the script refuses every port except the broker's own VIEWER listeners
+    // (read from the protected store, never from arguments), so what goes on the
+    // tailnet is always a page stamped with the viewer's Connection-Allowlist/CSP set.
+    // Serving any other port would bypass those headers (raw app port) or let the
+    // agent shadow the approval UI's :443 mapping with its own page; both stay
+    // impossible by construction. The audience is only ever the user's own tailnet —
+    // this script never touches `tailscale funnel` (public internet), and args go
+    // through execve, never a shell.
+    name: 'tailscale-serve', class: 'private-write',
+    description: 'Expose a hardened VIEWER port on the tailnet (or stop exposing it). ' +
+      'Args: `on <viewer-port>` serves https://<machine>.<tailnet>.ts.net:<viewer-port>; `off <viewer-port>` stops it; `status` lists current serves. ' +
+      'Only broker-published viewer ports (~/.escape-clause/viewer-ports) are accepted — never app ports, the approval UI, or funnel.',
+    script: `#!/bin/sh
+# Serve/stop a hardened viewer port on the tailnet — never any other port.
+cmd="$1"; port="$2"
+[ "$cmd" = status ] && exec tailscale serve status
+case "$cmd" in on|off) ;; *) echo "usage: on <viewer-port> | off <viewer-port> | status" >&2; exit 2 ;; esac
+allowed="\${ESCAPE_CLAUSE_DIR:-$HOME/.escape-clause}/viewer-ports"
+grep -qx "$port" "$allowed" 2>/dev/null || {
+  echo "refused: '$port' is not a broker viewer port (allowed: $(tr '\\n' ' ' < "$allowed" 2>/dev/null || echo 'none — is the broker running?'))" >&2
+  exit 3
+}
+if [ "$cmd" = on ]; then
+  exec tailscale serve --bg --https="$port" "localhost:$port"   # prints the tailnet URL
+else
+  exec tailscale serve --https="$port" off
+fi
+`,
+  },
+]
+export function seedPolicies() {
+  for (const p of SEEDS) if (!getPolicy(p.name)) installPolicy(p)
 }
