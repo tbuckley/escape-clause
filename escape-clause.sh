@@ -32,7 +32,7 @@ install_app() {
   command -v node >/dev/null || { echo "error: node not found" >&2; exit 1; }
   mkdir -p "$BASE" "$APP"
   chmod 700 "$BASE"
-  for f in broker.mjs server.mjs store.mjs policies.mjs proxy.mjs reviewer.mjs guard.mjs escape-clause.sh package.json; do
+  for f in broker.mjs server.mjs store.mjs policies.mjs proxy.mjs viewer.mjs reviewer.mjs guard.mjs escape-clause.sh package.json; do
     cp "$SRC/$f" "$APP/$f"
   done
   cp "$SRC/templates/CLAUDE.md" "$APP/CLAUDE.md"   # workspace template, stamped by init
@@ -130,7 +130,10 @@ EOF
       "args": ["$APP/broker.mjs"],
       "env": {
         "ESCAPE_CLAUSE_RELAY": "${ESCAPE_CLAUSE_RELAY:-deny}",
-        "ESCAPE_CLAUSE_UI_URL": "${ESCAPE_CLAUSE_UI_URL:-}"
+        "ESCAPE_CLAUSE_UI_URL": "${ESCAPE_CLAUSE_UI_URL:-}",
+        "ESCAPE_CLAUSE_VIEWER_PORT": "${ESCAPE_CLAUSE_VIEWER_PORT:-8793}",
+        "ESCAPE_CLAUSE_APP_PORTS": "${ESCAPE_CLAUSE_APP_PORTS:-3000}",
+        "ESCAPE_CLAUSE_VIEWER_ALLOW": "${ESCAPE_CLAUSE_VIEWER_ALLOW:-}"
       }
     }
   }
@@ -184,6 +187,9 @@ launch() {
   cat <<EOF
 workspace:   $WS  (config verified against $APP)
 approval UI: http://127.0.0.1:${ESCAPE_CLAUSE_UI_PORT:-8790}  — password in $BASE/secrets/password
+app viewer:  http://127.0.0.1:${ESCAPE_CLAUSE_VIEWER_PORT:-8793}+  → agent app port(s) ${ESCAPE_CLAUSE_APP_PORTS:-3000}
+             view agent-built web apps ONLY through this proxy — it forces
+             Connection-Allowlist/CSP headers so pages can't exfiltrate from your browser
 
 Talk to the agent right here in this terminal, from claude.ai or the Claude app
 (run /remote-control inside the session), or over a chat channel (set

@@ -27,6 +27,8 @@ browser (over Tailscale if you chat remotely); the proxies exist to refuse.
 | 8790 | approval UI | broker (`ESCAPE_CLAUSE_UI_PORT` moves it) |
 | 8791 | deny-all HTTP proxy (all sandboxed egress dies here) | broker (`ESCAPE_CLAUSE_PROXY_PORT` moves the pair) |
 | 8792 | deny-all SOCKS5 proxy (git-ssh, ftp, grpc, rsync) | broker (always HTTP proxy port + 1) |
+| 8793+ | hardened viewer proxy for agent-built web apps — one listener per app port, forcing `Connection-Allowlist`/CSP headers | broker (`ESCAPE_CLAUSE_VIEWER_PORT` moves the base; listener *i* forwards to the *i*-th `ESCAPE_CLAUSE_APP_PORTS` entry) |
+| 3000 | where the agent is told to bind web apps (`ESCAPE_CLAUSE_APP_PORTS`) — never expose this directly; browse via 8793 | the agent, inside the sandbox |
 | 8787 | fakechat web chat — only if you connect the optional fakechat channel | fakechat plugin |
 
 ## Environment variables
@@ -41,5 +43,8 @@ and `launch` with the same values set.
 | `ESCAPE_CLAUSE_UI_URL` | Base URL written into shared ticket links (default `http://127.0.0.1:<port>`). Link text only — the server always binds loopback; expose it with e.g. `tailscale serve` and set this to that address. |
 | `ESCAPE_CLAUSE_PROXY_PORT` | Deny-all HTTP proxy port; SOCKS is always +1 (default `8791`). |
 | `ESCAPE_CLAUSE_RELAY` | Permission-relay mode: `forward`, `deny` (default), or `off`. |
+| `ESCAPE_CLAUSE_VIEWER_PORT` | First viewer-proxy port (default `8793`); the *i*-th app port is served on `VIEWER_PORT + i`. |
+| `ESCAPE_CLAUSE_APP_PORTS` | Comma-separated localhost ports the agent serves web apps on (default `3000`). Stamped into `.mcp.json` so the agent can read where to bind. |
+| `ESCAPE_CLAUSE_VIEWER_ALLOW` | Comma-separated extra origins the viewed apps may contact (default none — same-origin only). Each is added to the `Connection-Allowlist` pattern list and the CSP source lists. |
 | `ESCAPE_CLAUSE_CHANNELS` | Optional `--channels` spec(s) for chat channel plugins, e.g. `plugin:fakechat@claude-plugins-official` (space-separate several). |
 | `ESCAPE_CLAUSE_CHANNEL_TOOLS` | Comma-separated permission entries for those channels' reply tools, stamped into the allow-list, e.g. `mcp__plugin_fakechat_fakechat`. |

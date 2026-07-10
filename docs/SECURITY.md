@@ -69,3 +69,19 @@ Three independent layers:
   old→new diff (proven by audit Part F).
 - **Tickets snapshot the exact argv/script at request time** — the approved bytes are
   what run, not whatever the agent has changed since.
+- **Agent-built web pages run in YOUR browser** — outside the sandbox, on your device,
+  with your network. That's an exfiltration surface no egress proxy sees: the page can
+  `fetch()` out, or a disguised link can navigate you off with data in the URL. The
+  viewer proxy (`viewer.mjs`) exists for exactly this: browse agent apps only through
+  it, never by exposing an agent port directly. It forces
+  [`Connection-Allowlist`](https://developer.chrome.com/blog/connection-allowlists-origin-trial)
+  + CSP headers so the page can reach nothing but its own origin — see
+  [ARCHITECTURE.md](ARCHITECTURE.md#viewer-proxy--browsing-agent-built-web-apps-without-an-exfil-path)
+  for the header set, the origin-trial token setup, and the residual gaps (browsers
+  without Connection-Allowlist support enforce only the CSP layer, which can't block
+  plain link navigations).
+- **The approval UI refuses cross-origin POSTs.** On one ts.net hostname the UI and
+  the viewer are different *origins* but the same *site*, so `SameSite=Lax` alone
+  would not keep an agent page's "simple" POST from riding the session cookie into
+  `/api/tickets/…/approve`. The viewer's headers stop that in the browser; the UI's
+  Origin-vs-Host check stops it server-side even for browsers that enforce neither.

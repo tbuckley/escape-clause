@@ -137,11 +137,51 @@ before launching. Details in [Troubleshooting](#troubleshooting).
   risk summary, and the agent's justification, quarantined as an untrusted claim.
 - **A policy engine** — named, hash-pinned scripts with per-class auto-approval:
   read-only things run instantly, anything with egress or write risk always tickets.
+- **A hardened viewer for agent-built web apps** — a reverse proxy that forces
+  [`Connection-Allowlist`](https://developer.chrome.com/blog/connection-allowlists-origin-trial)
+  + CSP headers on every page, so an app the agent wrote can't exfiltrate from *your*
+  browser when you open it. See [Viewing agent-built web apps](#viewing-agent-built-web-apps).
 - **Tamper resistance** — the broker installs outside the workspace, a fail-closed hook
   and sandbox deny-writes protect the launch config, and every launch verifies the
   config against the protected install.
 - **An adversarial audit** (`tests/sandbox-audit.mjs`) that ground-truths all of the
   above by actually trying to escape.
+
+## Viewing agent-built web apps
+
+Ask the agent to build you a web app and a new problem appears: the page runs in
+**your browser**, outside the sandbox — it could `fetch()` data out to any origin, or
+show a link that quietly navigates you elsewhere with data packed in the URL. The
+broker therefore runs a **viewer proxy** (default `127.0.0.1:8793` → app on `:3000`)
+that stamps every response with headers making your browser enforce *same-origin
+only*: Chrome's new
+[`Connection-Allowlist`](https://developer.chrome.com/blog/connection-allowlists-origin-trial)
+(blocks every off-origin fetch, **link navigation**, redirect, and WebSocket the page
+attempts) plus a same-origin `Content-Security-Policy` fallback for other browsers.
+Headers the agent's own server sets are stripped — it can't loosen the policy.
+
+To use it:
+
+1. **Tell the agent** to serve on the app port — the stamped workspace `CLAUDE.md`
+   already instructs it (default `3000`; change with `ESCAPE_CLAUSE_APP_PORTS`, e.g.
+   `3000,5173` for several apps → viewers on `8793,8794`).
+2. **Expose only the viewer** on your tailnet — never the agent's port:
+
+   ```bash
+   tailscale serve --bg --https=8443 8793   # → https://<machine>.<tailnet>.ts.net:8443
+   ```
+
+3. **Enable Connection-Allowlist in Chrome** (until it ships by default in Chrome 152):
+   register `https://<machine>.<tailnet>.ts.net:8443` for the *Connection Allowlists*
+   trial at the [origin trials dashboard](https://developer.chrome.com/origintrials),
+   and paste the token into `~/.escape-clause/secrets/origin-trial-tokens` (one per
+   line — no restart needed). Browse agent apps in Chrome ≥ 148: without the trial
+   active, the CSP layer still blocks fetches and form posts, but not plain link
+   clicks.
+
+If an app legitimately needs one outside origin, allow it explicitly with
+`ESCAPE_CLAUSE_VIEWER_ALLOW=https://api.example.com` (re-run `init` with it set).
+Details and residual gaps: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#viewer-proxy--browsing-agent-built-web-apps-without-an-exfil-path).
 
 ## Stopping and uninstalling
 
@@ -194,6 +234,7 @@ Inspect the file it names, then re-run `init` (with the same env you'll launch w
 | `store.mjs` | Durable state under `~/.escape-clause` (tickets, policies, password, `audit.log`) |
 | `policies.mjs` | Named scripts, hash-pinned, invoked as `execve` (never a shell) |
 | `proxy.mjs` | Deny-all egress proxy the sandbox routes through |
+| `viewer.mjs` | Hardened viewer proxy for agent-built web apps (forces `Connection-Allowlist` + CSP) |
 | `reviewer.mjs` | AI risk summaries — one Haiku call per ticket, advisory only |
 | `guard.mjs` | Fail-closed `PreToolUse` hook denying file tools on protected paths |
 | `escape-clause.sh` | `install` / `init` / `launch` |

@@ -30,6 +30,20 @@ export function uiPassword() {
   return readFileSync(f, 'utf8').trim()
 }
 
+// Chrome origin-trial token(s) for the Connection-Allowlist trial, stamped by the
+// viewer proxy onto every response (viewer.mjs). One token per line, `#` comments ok.
+// Register each origin you browse the viewer from (e.g.
+// https://<machine>.<tailnet>.ts.net:8443) at https://developer.chrome.com/origintrials
+// and paste the tokens here. Tokens are origin-bound and public by design (every page
+// ships them to the browser) — they live in the protected store so the AGENT can't
+// read or replace them, not because they're secret.
+export function originTrialTokens() {
+  try {
+    return readFileSync(join(SECRETS, 'origin-trial-tokens'), 'utf8')
+      .split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))
+  } catch { return [] }
+}
+
 // Login sessions, persisted so a broker restart doesn't sign everyone out. High-entropy
 // random tokens; pruned on every load.
 const SESSIONS = join(SECRETS, 'sessions.json')

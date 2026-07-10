@@ -45,6 +45,23 @@ export function startServer({ port, baseUrl, resolveTicket, log }) {
   const server = createServer(async (req, res) => {
     const path = new URL(req.url, 'http://127.0.0.1').pathname
     try {
+      // Cross-origin POST backstop. On a tailnet this UI and the viewer proxy (which
+      // serves AGENT-authored pages) typically share one ts.net hostname on different
+      // ports — different origins but the same SITE, so SameSite=Lax does not withhold
+      // the session cookie, and a "simple" cross-origin POST (no CORS preflight; the
+      // body parser below accepts JSON regardless of content-type) would ride it. The
+      // viewer's Connection-Allowlist/CSP headers already stop that page in the
+      // browser; this is the server-side backstop: refuse any POST whose Origin
+      // disagrees with the host it arrived at (x-forwarded-host when proxied).
+      if (req.method === 'POST' && req.headers.origin) {
+        let originHost = null
+        try { originHost = new URL(req.headers.origin).host } catch {}
+        if (originHost !== req.headers.host && originHost !== req.headers['x-forwarded-host']) {
+          audit('ui_cross_origin_post_refused', { origin: req.headers.origin, path })
+          res.writeHead(403, { 'content-type': 'text/plain' }).end('cross-origin POST refused')
+          return
+        }
+      }
       if (req.method === 'GET' && path === '/') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(page)
         return
