@@ -79,7 +79,9 @@ Three independent layers:
   [ARCHITECTURE.md](ARCHITECTURE.md#viewer-proxy--browsing-agent-built-web-apps-without-an-exfil-path)
   for the header set, the origin-trial token setup, and the residual gaps (browsers
   without Connection-Allowlist support enforce only the CSP layer, which can't block
-  plain link navigations). The seeded `tailscale-serve` policy lets the agent put a
+  plain link navigations). Don't take the posture on faith: each viewer port serves a
+  self-check page at `/__escape-clause-check__` that probes the protections from the
+  browser's side — run it per browser/device before opening agent apps. The seeded `tailscale-serve` policy lets the agent put a
   viewer port on your tailnet itself, and stays auto-runnable only because the pinned
   script refuses everything except broker-published viewer ports — an unconstrained
   `tailscale serve` would let the agent expose un-hardened ports or shadow the

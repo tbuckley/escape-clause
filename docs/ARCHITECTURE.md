@@ -233,10 +233,44 @@ Two rules make the design hold:
    refuses cross-origin POSTs server-side (see `server.mjs`), but same-*origin* would
    let an agent page use the UI's logged-in session outright.
 
+### The self-check page
+
+"Am I actually protected?" shouldn't be unfalsifiable until the day it matters, so
+every viewer port serves a self-check page at `/__escape-clause-check__` — answered by
+the viewer itself (never proxied; it works with no app running, and an agent app can
+never serve that path through the viewer), with the same header set an app response
+gets. Its checks are layered, because no single probe covers everything:
+
+- **Are you on the viewer at all?** The page's status endpoint only exists on viewer
+  ports — hitting a raw agent port by mistake fails loudly. It also shows which app
+  port this viewer fronts and the exact allowlist being enforced.
+- **Token sanity.** Your origin-trial token(s) are decoded (not signature-verified —
+  only Chrome can do that) and compared against the page's own origin: a token
+  registered for the wrong port, or expired, is flagged before you'd silently browse
+  unprotected. Plus a browser-version hint (Chromium ≥ 148 trial, ≥ 152 default-on).
+- **CSP layer (automatic, every browser).** A canary `<img>` must fire
+  `securitypolicyviolation` — positive proof the fallback layer enforces. The canary
+  host is under the RFC 2606-reserved `.example` TLD, so even a fully unprotected
+  browser only gets NXDOMAIN; nothing real is ever contacted.
+- **Connection-Allowlist itself (automatic, Chrome).** CSP blocks fetches *before*
+  the allowlist ever sees them, so this probe runs in an iframe whose response —
+  alone — loosens `connect-src` for the canary and adds a `report-to` param plus a
+  `Reporting-Endpoints` header pointing back at the viewer. A violation report
+  arriving is positive proof the allowlist is actively enforcing. Agent app
+  responses never get this loosened variant.
+- **The manual link test (ground truth).** A plain `<a>` to another origin — the one
+  vector CSP cannot block and the reason the origin trial matters. If the click is
+  blocked, you're protected; if example.com loads, that browser would follow a
+  disguised link out of an agent app.
+
+Run it per browser and per device, after browser updates, and after rotating tokens.
+(The `/__escape-clause-check__` path prefix is reserved by the viewer; an app using
+that exact path would be shadowed — pick another name.)
+
 Residual gaps, stated honestly: a non-Chrome browser (or Chrome without a valid token,
 before 152) ignores `Connection-Allowlist`, leaving only the CSP layer — fetches and
 forms still blocked, but a disguised cross-origin *link* would navigate. Until the
 feature ships everywhere you browse from, open agent apps in Chrome ≥ 148 with your
-token installed. And nothing about the viewer stops the agent from *asking you in
-chat* to visit an external URL — links in chat deserve the same suspicion as ticket
-justifications.
+token installed — and let the self-check page prove it. And nothing about the viewer
+stops the agent from *asking you in chat* to visit an external URL — links in chat
+deserve the same suspicion as ticket justifications.

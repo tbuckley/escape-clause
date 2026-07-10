@@ -186,6 +186,15 @@ To use it:
    active, the CSP layer still blocks fetches and form posts, but not plain link
    clicks.
 
+4. **Verify before trusting**: open
+   `https://<machine>.<tailnet>.ts.net:8793/__escape-clause-check__` — a self-check
+   page served by the viewer itself, with the same headers agent apps get. It
+   confirms you're actually on the viewer, decodes your origin-trial token (origin
+   match, expiry), proves the CSP layer enforces (canary probe), tries to positively
+   confirm Connection-Allowlist via a violation-report probe, and gives you a
+   one-click manual test: a link that should be **blocked** if you're protected.
+   Re-run it in every browser you'll use and after browser updates.
+
 If an app legitimately needs one outside origin, allow it explicitly with
 `ESCAPE_CLAUSE_VIEWER_ALLOW=https://api.example.com` (re-run `init` with it set).
 Details and residual gaps: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#viewer-proxy--browsing-agent-built-web-apps-without-an-exfil-path).
