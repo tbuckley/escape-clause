@@ -43,3 +43,7 @@ and `launch` with the same values set.
 | `ESCAPE_CLAUSE_RELAY` | Permission-relay mode: `forward`, `deny` (default), or `off`. |
 | `ESCAPE_CLAUSE_CHANNELS` | Optional `--channels` spec(s) for chat channel plugins, e.g. `plugin:fakechat@claude-plugins-official` (space-separate several). |
 | `ESCAPE_CLAUSE_CHANNEL_TOOLS` | Comma-separated permission entries for those channels' reply tools, stamped into the allow-list, e.g. `mcp__plugin_fakechat_fakechat`. |
+| `ESCAPE_CLAUSE_PROFILE` | Directory-access profile: `default`, `strict` (all of `~` hidden except the workspace), or `paranoid` (workspace + toolchain only). See [directory-access.md](directory-access.md). |
+| `ESCAPE_CLAUSE_DENY_READ` | Comma-separated extra paths made unreadable (and unwritable) on both layers — bash sandbox + file-tool guard. |
+| `ESCAPE_CLAUSE_DENY_WRITE` | Comma-separated extra paths made unwritable on both layers. |
+| `ESCAPE_CLAUSE_ALLOW_READ` | Comma-separated read-only carve-outs from the `strict`/`paranoid` read fence. Cannot re-expose crown-jewel paths (`init` refuses). |

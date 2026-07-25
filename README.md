@@ -45,12 +45,17 @@ cd escape-clause
 ```
 
 **2. Initialize a workspace** — any directory that doesn't contain the broker source.
-This stamps the sandbox + broker config: three plain-JSON files, and that's the whole
+This stamps the sandbox + broker config: four plain-JSON files, and that's the whole
 configuration.
 
 ```bash
 ~/.escape-clause/app/escape-clause.sh init ~/escape-clause-workspace
 ```
+
+By default the agent can't read your credentials or write anywhere that would run code
+outside the sandbox later — and `ESCAPE_CLAUSE_PROFILE=strict` hides *everything* under
+`~` except the workspace itself. Profiles, custom deny lists, and the macOS/Linux
+directories worth hiding: [docs/directory-access.md](docs/directory-access.md).
 
 **3. Start a sandboxed session** in a terminal you'll keep open. Trust the workspace
 when asked; `Channels: server:broker` on startup confirms the broker is live.
@@ -130,7 +135,10 @@ before launching. Details in [Troubleshooting](#troubleshooting).
 ## What's in the box
 
 - **A hardened sandbox** — all egress dies at a deny-all proxy (so there's never an
-  "allow this domain?" prompt), secrets like `~/.ssh` unreadable, escape hatches closed.
+  "allow this domain?" prompt), secrets like `~/.ssh` unreadable, host persistence
+  vectors (LaunchAgents, shell rc files, …) unwritable, escape hatches closed — with
+  opt-in `strict`/`paranoid` profiles that hide your whole home directory
+  ([docs/directory-access.md](docs/directory-access.md)).
 - **A broker (MCP server)** the agent uses to *request* outside actions — non-blocking
   tickets it can create and read but, by construction, never resolve.
 - **An approval web UI** — password login, live queue: the exact command or URL, an AI
@@ -195,7 +203,7 @@ Inspect the file it names, then re-run `init` (with the same env you'll launch w
 | `policies.mjs` | Named scripts, hash-pinned, invoked as `execve` (never a shell) |
 | `proxy.mjs` | Deny-all egress proxy the sandbox routes through |
 | `reviewer.mjs` | AI risk summaries — one Haiku call per ticket, advisory only |
-| `guard.mjs` | Fail-closed `PreToolUse` hook denying file tools on protected paths |
+| `guard.mjs` | Fail-closed `PreToolUse` hook denying file tools on protected paths + the stamped directory policy |
 | `escape-clause.sh` | `install` / `init` / `launch` |
 | `templates/CLAUDE.md` | Rules-of-the-box instructions stamped into new workspaces |
 | `docs/` | Architecture, security model, design docs and proposals |
@@ -212,6 +220,10 @@ Inspect the file it names, then re-run `init` (with the same env you'll launch w
   independent layers keeping the approve path out of the agent's reach, the three
   keeping the broker itself out, and the sharp edges worth knowing (guard hook, MCP
   denylist vs. allowlist, hash pinning).
+- **[docs/directory-access.md](docs/directory-access.md)** — limiting what the agent
+  can see and touch: the `default`/`strict`/`paranoid` profiles, denying extra
+  directories on both enforcement layers, the persistence-vector write floor
+  (LaunchAgents, shell rc files, autostart, …), and the honest limits.
 - **[tests/README.md](tests/README.md)** — what the adversarial audit actually probes.
 - **[docs/securing-agent.md](docs/securing-agent.md)** — the motivating essay: why
   containment plus a brokered escape hatch, rather than trust.

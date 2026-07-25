@@ -1,5 +1,12 @@
 # Sandbox soundness audit
 
+Two test entry points live here:
+
+- **`guard-test.mjs`** — fast unit tests for the guard hook's directory-access decisions
+  (floor, persistence write-denies, profiles, symlink/`..` laundering, fail-closed).
+  Needs only Node and the repo: `node tests/guard-test.mjs`.
+- **`sandbox-audit.mjs`** — the full adversarial audit below.
+
 `sandbox-audit.mjs` is an adversarial test that checks the sandbox configuration the
 plugin stamps into workspaces is actually sound — it does not trust the agent's
 self-report, it ground-truths every result against decoy files it controls. Run
@@ -33,11 +40,15 @@ temp dir, so even a total sandbox failure can't touch real files.
 
 **B. Config drift** — stamps a fresh workspace with `escape-clause.sh init` and confirms it
 carries the sound config: sandbox enabled with no allowed domains, WebFetch/WebSearch
-denied, `allowUnsandboxedCommands: false`, `denyRead` for crown-jewel paths, `denyWrite`
-for the workspace's own launch config (bash-proof, not just file-tool-proof), the guard
-hook wired `*`/fail-closed from the protected install and covering the workspace launch
-config, non-broker MCP tools denied, and no workspace config checked into the source
-tree.
+denied, `allowUnsandboxedCommands: false`, `denyRead` for crown-jewel paths (including
+Claude Code's own `~/.claude.json` credentials), `denyWrite` for the workspace's own
+launch config (bash-proof, not just file-tool-proof), the guard hook wired
+`*`/fail-closed from the protected install and covering the workspace launch config, the
+guard policy file (`.claude/escape-clause-policy.json`) stamped and covered by the launch
+drift-check, the guard's write-deny floor over host persistence vectors (launchd, shell
+rc, autostart, PATH dirs, `~/.claude`), the strict profile's `denyRead: "~/"` +
+`allowRead: "."` home lockdown, non-broker MCP tools denied, and no workspace config
+checked into the source tree.
 
 **C. Launch load + autonomy + config tamper** — runs `claude -p` from a freshly stamped
 workspace the documented way (no `--settings`) and confirms three things: the sandbox

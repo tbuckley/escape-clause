@@ -50,7 +50,17 @@ Three independent layers:
   `Glob()`, … and any future tool. The hook is wired with a `*` matcher, so it's a true
   global choke point: it runs before every tool call, resolves the target with
   `realpath` (so a symlink or `..` can't disguise a protected target), and denies — the
-  settings equivalent of the Agent SDK's `canUseTool`. Exercised by the audit's Part D.
+  settings equivalent of the Agent SDK's `canUseTool`. Exercised by the audit's Part D
+  and unit-tested by `tests/guard-test.mjs`.
+- **File tools are write-denied on host persistence vectors** — `~/Library/LaunchAgents`,
+  shell rc files, `~/.config/autostart`, systemd user units, PATH dirs like
+  `~/.local/bin` and Homebrew's, `~/.gitconfig`, and `~/.claude` (user-level Claude Code
+  hooks run unsandboxed). Sandboxed bash already can't write outside the workspace; the
+  file tools run *unsandboxed*, so without this floor a prompt-injected agent could drop
+  a launchd plist or a `.bashrc` line and have code run on the host at the next login.
+  Opt-in `strict`/`paranoid` profiles additionally hide everything under `~` (or
+  everything outside the workspace + toolchain) from both layers — see
+  [directory-access.md](directory-access.md).
 - **Non-broker MCP is denied by a denylist** (`mcp__claude_ai_Gmail/Calendar/Drive` in
   `permissions.deny`). MCP servers run outside the sandbox, so each connected one is a
   network + private-data path. The stronger posture is an allowlist
