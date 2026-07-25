@@ -46,7 +46,12 @@ export function runPolicy(name, args = [], { cwd = process.cwd(), timeout = 1500
     return Promise.resolve({ exitCode: 126, stdout: '', stderr: 'policy store corrupt: script does not match pinned hash — refusing to run' })
   }
   return new Promise((res) => execFile(join(POLICY_DIR, `${name}.script`), args.map(String),
-    { cwd, timeout, env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin', HOME: process.env.HOME || '' } },
+    // USER/LOGNAME are identity, not secrets: tools that talk to the OS keychain
+    // (e.g. gws via keyring-rs) derive the keychain account from $USER and fall back
+    // to a fictional user without it — generating wrong keys and destroying real
+    // credentials. See gws-cli/unknown-user incident, 2026-07-25.
+    { cwd, timeout, env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin', HOME: process.env.HOME || '',
+      USER: process.env.USER || '', LOGNAME: process.env.LOGNAME || '' } },
     (e, out, err) => res({ exitCode: e ? (typeof e.code === 'number' ? e.code : 1) : 0, stdout: String(out), stderr: String(err || (e && !out ? e.message : '')) })))
 }
 
