@@ -159,3 +159,118 @@ The proxy only ever refuses — it executes nothing and has no approval surface 
 unlike the ticket path there is nothing on it to protect. Legitimate egress still goes
 through the broker (`fetch-url` policy or a ticket), where a human reviews the exact
 request.
+
+## Viewer proxy — browsing agent-built web apps without an exfil path
+
+The sandbox blocks the agent's *egress*, but the agent can still bind dev servers on
+localhost — that's inbound, and it's the whole point of asking it to build you a web
+app. The catch is where that page eventually runs: **your browser, on your device,
+outside every sandbox rule**. A page the agent authored can `fetch()` any origin on
+the open internet the moment you open it, or dress up a link that navigates you
+somewhere else with data packed into the URL — a clean exfiltration channel that never
+touches the deny-all proxy.
+
+`viewer.mjs` closes that channel by making *your browser* the last sandbox wall. The
+broker starts one viewer listener per agent app port (`8793+i → ESCAPE_CLAUSE_APP_PORTS[i]`,
+default a single `8793 → 3000`), each a reverse proxy that stamps every response with:
+
+- **`Connection-Allowlist: (response-origin)`** — Chrome's
+  [connection allowlist](https://developer.chrome.com/blog/connection-allowlists-origin-trial)
+  (origin trial in Chrome 148–151, shipping by default in 152). The browser blocks
+  **every** connection the page initiates — subresource fetches, *link navigations*,
+  redirects, WebSocket/WebRTC/WebTransport, prefetch/preload — unless the destination
+  is on the list. `response-origin` means the page may talk only to the viewer's own
+  origin: both exfil paths (background fetch *and* the disguised link) die in the
+  browser.
+- **`Origin-Trial: <your token(s)>`** — enables the trial before Chrome 152. Register
+  the exact origin you browse from (e.g. `https://<machine>.<tailnet>.ts.net:8793`) at
+  the [origin trials dashboard](https://developer.chrome.com/origintrials) and paste
+  the token(s), one per line, into `~/.escape-clause/secrets/origin-trial-tokens`
+  (picked up per-request — no restart). Omitted if the file doesn't exist.
+- **`Content-Security-Policy`** (same-origin `default-src`, `form-action 'self'`,
+  `base-uri 'self'`, `object-src 'none'`) — the widely-supported fallback: the same
+  posture for fetches, subresources, and form posts in every browser. CSP cannot block
+  a plain `<a>` click to another origin — that's exactly the gap Connection-Allowlist
+  closes, which is why both are sent.
+- `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`.
+
+Any attempt by the upstream (agent-controlled) server to set these headers itself —
+including `Connection-Allowlist`, any CSP, `Origin-Trial`, reporting endpoints, or a
+`Refresh` redirect header — is **stripped before ours are written**, so the page can
+never loosen the policy it's served under. WebSocket upgrades (dev-server HMR) are
+spliced through untouched; where the *page* may dial is already governed by its
+document's headers. Need a deliberate hole (say, the app genuinely calls one external
+API)? `ESCAPE_CLAUSE_VIEWER_ALLOW=https://api.example.com` adds that origin to both
+the allowlist and the CSP.
+
+Like everything else, the viewer binds loopback only. Put it on your tailnet next to
+the approval UI (the convention is tailnet HTTPS port = viewer port, so URLs stay
+predictable and `:443` stays reserved for the UI):
+
+```bash
+tailscale serve --bg 8790                 # approval UI  → https://<machine>.<tailnet>.ts.net
+tailscale serve --bg --https=8793 8793    # app viewer   → https://<machine>.<tailnet>.ts.net:8793
+```
+
+You can also let the **agent** manage this step: the seeded `tailscale-serve` policy
+(class `private-write`, so it auto-runs) accepts `on <viewer-port>` /
+`off <viewer-port>` / `status`. Auto-run is earned, not assumed: the pinned script
+refuses every port not on the broker-published list (`~/.escape-clause/viewer-ports`,
+written by `viewer.mjs` at startup — never taken from the agent's arguments), so the
+agent cannot serve a raw app port (bypassing the headers), cannot touch the `:443`
+mapping your approval UI lives on, and never reaches `tailscale funnel` (public
+internet). What it can expose is tailnet-private *and* viewer-hardened — both halves
+of "private" — which is what justifies the `private-write` class.
+
+Two rules make the design hold:
+
+1. **Never `tailscale serve` an agent port directly.** The agent's own server would
+   pick its own headers. Only the viewer ports go on the tailnet; the stamped
+   workspace `CLAUDE.md` tells the agent to serve on the app ports and to keep
+   everything same-origin.
+2. **Keep the viewer on a different port (origin) than the approval UI** — the default.
+   Same-*site* is unavoidable on one ts.net hostname, which is why the UI additionally
+   refuses cross-origin POSTs server-side (see `server.mjs`), but same-*origin* would
+   let an agent page use the UI's logged-in session outright.
+
+### The self-check page
+
+"Am I actually protected?" shouldn't be unfalsifiable until the day it matters, so
+every viewer port serves a self-check page at `/__escape-clause-check__` — answered by
+the viewer itself (never proxied; it works with no app running, and an agent app can
+never serve that path through the viewer), with the same header set an app response
+gets. Its checks are layered, because no single probe covers everything:
+
+- **Are you on the viewer at all?** The page's status endpoint only exists on viewer
+  ports — hitting a raw agent port by mistake fails loudly. It also shows which app
+  port this viewer fronts and the exact allowlist being enforced.
+- **Token sanity.** Your origin-trial token(s) are decoded (not signature-verified —
+  only Chrome can do that) and compared against the page's own origin: a token
+  registered for the wrong port, or expired, is flagged before you'd silently browse
+  unprotected. Plus a browser-version hint (Chromium ≥ 148 trial, ≥ 152 default-on).
+- **CSP layer (automatic, every browser).** A canary `<img>` must fire
+  `securitypolicyviolation` — positive proof the fallback layer enforces. The canary
+  host is under the RFC 2606-reserved `.example` TLD, so even a fully unprotected
+  browser only gets NXDOMAIN; nothing real is ever contacted.
+- **Connection-Allowlist itself (automatic, Chrome).** CSP blocks fetches *before*
+  the allowlist ever sees them, so this probe runs in an iframe whose response —
+  alone — loosens `connect-src` for the canary and adds a `report-to` param plus a
+  `Reporting-Endpoints` header pointing back at the viewer. A violation report
+  arriving is positive proof the allowlist is actively enforcing. Agent app
+  responses never get this loosened variant.
+- **The manual link test (ground truth).** A plain `<a>` to another origin — the one
+  vector CSP cannot block and the reason the origin trial matters. If the click is
+  blocked, you're protected; if example.com loads, that browser would follow a
+  disguised link out of an agent app.
+
+Run it per browser and per device, after browser updates, and after rotating tokens.
+(The `/__escape-clause-check__` path prefix is reserved by the viewer; an app using
+that exact path would be shadowed — pick another name.)
+
+Residual gaps, stated honestly: a non-Chrome browser (or Chrome without a valid token,
+before 152) ignores `Connection-Allowlist`, leaving only the CSP layer — fetches and
+forms still blocked, but a disguised cross-origin *link* would navigate. Until the
+feature ships everywhere you browse from, open agent apps in Chrome ≥ 148 with your
+token installed — and let the self-check page prove it. And nothing about the viewer
+stops the agent from *asking you in chat* to visit an external URL — links in chat
+deserve the same suspicion as ticket justifications.

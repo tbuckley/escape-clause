@@ -13,6 +13,9 @@
 //     grpc/rsync) (proxy.mjs) — settings.json points the sandbox at them
 //     (sandbox.network.httpProxyPort/socksProxyPort), so off-allowlist network fails
 //     closed instantly with no SandboxNetworkAccess prompt; the broker is the only exit
+//   - hardened viewer proxy on 127.0.0.1:8793+ (viewer.mjs) — the door for viewing
+//     agent-built web apps: forces Connection-Allowlist/CSP headers so the page can't
+//     phone anywhere but its own origin from YOUR browser
 //
 // State is durable JSON under ~/.escape-clause (store.mjs), which the sandbox + guard
 // hook deny to the agent. Tickets snapshot the exact argv/script at request time; the
@@ -29,6 +32,7 @@ import { CLASSES, AUTO_CLASSES, NAME_RE, getPolicy, listPolicies, policyScript, 
 import { review } from './reviewer.mjs'
 import { startServer } from './server.mjs'
 import { startProxy } from './proxy.mjs'
+import { startViewer } from './viewer.mjs'
 
 const PORT = Number(process.env.ESCAPE_CLAUSE_UI_PORT || 8790)
 // Base URL the USER reaches the review UI at — override when the UI is behind a tunnel /
@@ -349,5 +353,13 @@ mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
 const ui = startServer({ port: PORT, baseUrl: UI_URL, resolveTicket, log })
 const PROXY_PORT = Number(process.env.ESCAPE_CLAUSE_PROXY_PORT || 8791)
 startProxy({ port: PROXY_PORT, socksPort: PROXY_PORT + 1, log, audit })
+// Viewer proxy: one listener per agent app port (VIEWER_PORT+i → APP_PORTS[i]), each
+// stamping the Connection-Allowlist/CSP header set — see viewer.mjs for the why.
+const VIEWER_PORT = Number(process.env.ESCAPE_CLAUSE_VIEWER_PORT || 8793)
+const APP_PORTS = (process.env.ESCAPE_CLAUSE_APP_PORTS || '3000')
+  .split(',').map((p) => Number(p.trim())).filter((p) => Number.isInteger(p) && p > 0)
+const VIEWER_ALLOW = (process.env.ESCAPE_CLAUSE_VIEWER_ALLOW || '')
+  .split(',').map((s) => s.trim()).filter(Boolean)
+startViewer({ basePort: VIEWER_PORT, appPorts: APP_PORTS, allowOrigins: VIEWER_ALLOW, log })
 await mcp.connect(new StdioServerTransport())
 log(`broker up (stdio MCP + channel, relay=${RELAY}). store: ${DIR}`)
