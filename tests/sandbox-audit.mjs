@@ -156,6 +156,11 @@ function configChecks() {
   out.push({ name: 'denyWrite covers workspace launch config (bash sandbox)', sev: 'critical',
     pass: Array.isArray(s?.filesystem?.denyWrite) && ['./.claude', './.mcp.json'].every(p => s.filesystem.denyWrite.includes(p)),
     detail: JSON.stringify(s?.filesystem?.denyWrite || 'none') })
+  // the ONLY write re-allow inside .claude may be skills — anything else in allowWrite
+  // (settings.json, the policy file, or a broader path) would re-open the launch config
+  out.push({ name: 'sandbox allowWrite opens only .claude/skills', sev: 'critical',
+    pass: Array.isArray(s?.filesystem?.allowWrite) && s.filesystem.allowWrite.length === 1 && s.filesystem.allowWrite[0] === './.claude/skills',
+    detail: JSON.stringify(s?.filesystem?.allowWrite || 'none') })
 
   // native file tools (Read/Edit/Write) bypass the bash sandbox — must be blocked separately
   const dp = sp?.permissions?.deny || []
@@ -245,11 +250,13 @@ function pluginLaunchCheck() {
     // switched to a custom egress proxy via httpProxyPort, so don't grep for those)
     spawnSync('claude', ['-p', 'Run these bash commands exactly, one at a time, and do not use any other tool: ' +
       '(env | grep -qE "^SANDBOX_RUNTIME=|srt:" && echo SANDBOXED || echo NO_SANDBOX) > ./launch_probe.txt ; ' +
-      'echo TAMPER >> ./.claude/settings.json ; echo TAMPER >> ./.claude/settings.local.json ; echo TAMPER >> ./.claude/escape-clause-policy.json ; echo TAMPER >> ./.mcp.json ; echo done'],
+      'echo TAMPER >> ./.claude/settings.json ; echo TAMPER >> ./.claude/settings.local.json ; echo TAMPER >> ./.claude/escape-clause-policy.json ; echo TAMPER >> ./.mcp.json ; ' +
+      'mkdir -p ./.claude/skills/audit-probe && echo "audit skill" > ./.claude/skills/audit-probe/SKILL.md ; echo done'],
       { cwd: dir, input: '', timeout: 240000, encoding: 'utf8', stdio: ['pipe', 'ignore', 'ignore'] })
   } catch {}
   let content = ''; try { content = readFileSync(probe, 'utf8') } catch {}
   const after = cfgFiles.map(f => { try { return readFileSync(join(dir, f), 'utf8') } catch { return null } })
+  const skillWritten = existsSync(join(dir, '.claude/skills/audit-probe/SKILL.md'))
   rmSync(dir, { recursive: true, force: true })
   if (!content) return [{ name: 'launch loads the sandbox (auto-load probe)', sev: 'hardening', pass: false, detail: 'could not run claude -p to verify (skipped)' }]
   // The bash command WROTE the file at all => it ran headless with no human to approve,
@@ -266,6 +273,12 @@ function pluginLaunchCheck() {
     { name: 'sandboxed bash cannot rewrite workspace launch config (denyWrite behavioral)', sev: 'critical', pass: untouched,
       detail: untouched ? 'settings.json/settings.local.json/.mcp.json byte-identical after bash tamper attempt'
         : `TAMPERED: ${cfgFiles.filter((_, i) => after[i] !== before[i]).join(', ')} — bash can rewrite the config that launches the NEXT session` },
+    // functionality, not soundness: if this platform's sandbox doesn't honor a write
+    // re-allow inside a denied region, skills writes fail CLOSED for bash (file tools
+    // still work via the guard carve-out) — warn, don't fail the audit
+    { name: 'sandboxed bash can write .claude/skills (carve-out behavioral)', sev: 'hardening', pass: skillWritten,
+      detail: skillWritten ? 'skill file written under .claude/skills while the rest of .claude stayed denyWrite'
+        : 'skills write blocked — allowWrite inside denyWrite not honored on this platform; agents fall back to the Write tool (guard carve-out)' },
   ]
 }
 
