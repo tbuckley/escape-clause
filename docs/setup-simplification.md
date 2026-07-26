@@ -13,7 +13,10 @@ This proposes moving workspace configuration into **named, human-readable config
 in the protected store** (`~/.escape-clause/configs/<name>.json`), fed by an
 **interactive question-by-question `init`**, checked by a **`doctor`** command, and —
 longer term — verified by a **SessionStart hook** so that plain `claude` becomes a
-legitimate way to start a session and the launcher becomes optional sugar.
+legitimate way to start a session and the launcher becomes optional sugar. It also
+covers a pluggable **exposure provider** interface (tailscale and its successors as
+one narrow contract) and an **upgrade path** — `escape-clause update` plus a
+shim/daemon split — that applies new broker code without restarting running sessions.
 
 ## What setup costs today
 
@@ -75,7 +78,7 @@ matching today's:
   "workspace": "~/escape-clause-workspace",
   "profile": "strict",
   "relay": "deny",
-  "ui": { "port": 8790, "url": "https://mybox.tail1234.ts.net" },
+  "ui": { "port": 8790, "expose": "tailscale" },
   "proxyPort": 8791,
   "channels": [
     {
@@ -119,12 +122,12 @@ Workspace: ~/escape-clause-workspace  (new)
      3) paranoid  – workspace + system toolchain only
    choice [2]:
 
-2. Will you approve requests from another device (phone/laptop)?
-     Approval links default to http://127.0.0.1:8790, which only works on this
-     machine. If you'll chat remotely, expose the UI on your tailnet:
-       tailscale serve --bg 8790
-   detected: tailscale is running, this machine is mybox.tail1234.ts.net
-   run 'tailscale serve' and use that URL? [Y/n]:
+2. How will you open approval links?
+     1) this machine only – links point at http://127.0.0.1:8790   (default)
+     2) I have my own URL – you run the tunnel/reverse proxy; paste its address
+     3) tailscale         – built-in provider: tailscale serve --bg 8790
+     4) custom script     – your own provider in ~/.escape-clause/expose/
+   choice [1]:
 
 3. Connect a chat channel (Telegram, Discord, fakechat, …)? [y/N]:
      (asks for the plugin spec + reply tool, or picks from known plugins)
@@ -142,15 +145,49 @@ Non-interactive paths keep working for scripts and docs: `init <dir> --profile s
 default; `init <dir>` with an existing config re-stamps silently (today's behavior) and
 `init <dir> --reconfigure` re-runs the wizard seeded with current values.
 
-The tailscale question is the "auto-start tailscale" ask from the issue, scoped
-honestly: if `tailscale` is on PATH and logged in we offer to run `tailscale serve
---bg <port>` and write the resulting URL into the config; if not, we print the two
-commands to run later. We don't install or babysit tailscale — one arbitrary
-pre-launch hook is a temptation we should resist in a security tool (an attacker-owned
-line in a config file that we exec on the host would be the softest target in the
-system).
+Note what question 2 does *not* do: auto-detect. The wizard never changes behavior
+because of what it found on the machine — you choose a provider, and only then does it
+*verify* the choice ("tailscale is up, logged in as mybox.…"). Detection confirms a
+decision; it never makes one.
 
-### 3. `doctor`
+### 3. Reaching the UI from other devices: exposure providers
+
+The approval UI always binds loopback — that invariant doesn't move. What varies is
+how a URL that reaches it comes to exist, and today that's a hand-rolled side quest
+(run `tailscale serve` yourself, export `ESCAPE_CLAUSE_UI_URL`, re-init). Make it a
+first-class, pluggable concept instead. In `ui`:
+
+| Config | Meaning |
+|---|---|
+| *(nothing)* | Links use `http://127.0.0.1:<port>`. The default. |
+| `"url": "https://…"` | Static: you own the tunnel/reverse proxy; we just write links. |
+| `"expose": "tailscale"` | Built-in provider. |
+| `"expose": "script:<name>"` | Your provider: the executable `~/.escape-clause/expose/<name>`. |
+
+One provider contract covers tailscale-alikes, tunnel daemons, and anything not yet
+invented:
+
+- The broker starts the provider on the host at startup, with the UI port as its
+  argument (and `ESCAPE_CLAUSE_UI_PORT` in env).
+- The provider prints the public URL as its **first line of stdout**. That URL is what
+  ticket links use.
+- Then it either **exits 0** (the tunnel is managed elsewhere — `tailscale serve --bg`
+  style) or **stays resident** for the life of the tunnel (`cloudflared tunnel`,
+  `ngrok`, `ssh -R` style); the broker supervises resident providers, restarts them on
+  crash, and tears them down on shutdown. stderr goes to `broker.log`.
+
+The built-in `tailscale` provider is just this contract implemented internally:
+run `tailscale serve --bg <port>`, derive the URL from `tailscale status`. A
+`cloudflare` or `ngrok` built-in later is a page of code, and anyone can ship their
+own as a script in the meantime without waiting on us.
+
+Security framing: provider scripts live in the protected store, which is the same
+trust domain as the broker code itself — the agent can neither write the script nor
+the config line that names it. And the contract is deliberately narrow — one job
+(produce a URL for one port), one output, named in plain sight in the config — which
+is what separates it from the general exec-from-config hook rejected below.
+
+### 4. `doctor`
 
 The owner's comment on #16 suggests exactly this, and it pairs naturally with the
 config file — verification gets a home that *explains* instead of refusing:
@@ -166,13 +203,14 @@ checks, with a fix-it line per failure:
 - workspace registered, config file parses, stamp matches config (the launch check,
   but with a diff of *which* file and *which* setting drifted)
 - UI/proxy ports free or already held by a live broker
-- if `ui.url` is set: tailscale up, serve active for the port
+- if the config sets an exposure provider: it's runnable, active, and the URL it
+  reports is the one links are using
 - channel plugins from the config actually installed
 
 `launch` keeps its hard verification but its error message becomes one line:
 `config drift — run: escape-clause doctor <dir>`.
 
-### 4. Command surface after
+### 5. Command surface after
 
 Matches the comment on the issue, plus a PATH nicety: `install` symlinks
 `~/.local/bin/escape-clause` → `$APP/escape-clause.sh` (asking first), so every
@@ -183,9 +221,10 @@ subsequent command is the same short word regardless of where it lives:
 escape-clause init <dir>         # wizard on a TTY; flags for scripts
 escape-clause doctor [dir]       # explain what's wrong, if anything
 escape-clause launch [dir]       # verify + print + exec claude (unchanged contract)
+escape-clause update             # pull + reinstall + restart the broker (see Upgrades)
 ```
 
-### 5. Toward not needing the launcher (follow-up, separate issue)
+### 6. Toward not needing the launcher (follow-up, separate issue)
 
 "I still don't love that we have to use Escape Clause to launch all of this."
 The launcher does exactly two things: drift verification, and the
@@ -202,7 +241,7 @@ The launcher does exactly two things: drift verification, and the
   pure convenience (a printed reminder of the command, as the no-magic rule always
   intended). Until then the wizard can offer to append a per-workspace shell alias.
 
-This is deliberately phased last: it changes the trust story (verification at session
+This is deliberately phased late: it changes the trust story (verification at session
 start instead of before exec) and deserves its own review.
 
 ## The DX, end to end
@@ -243,12 +282,14 @@ Workspace: ~/my-project  (new)
      3) paranoid  – workspace + system toolchain only
    choice [2]: ⏎
 
-2. Will you approve requests from another device (phone/laptop)?
-     Approval links default to http://127.0.0.1:8790, which only works on this
-     machine.
-   detected: tailscale is running, this machine is mybox.tail1234.ts.net
-   expose the approval UI at https://mybox.tail1234.ts.net? [y/N] y
-   ran: tailscale serve --bg 8790
+2. How will you open approval links?
+     1) this machine only – links point at http://127.0.0.1:8790   (default)
+     2) I have my own URL – you run the tunnel/reverse proxy; paste its address
+     3) tailscale         – built-in provider: tailscale serve --bg 8790
+     4) custom script     – your own provider in ~/.escape-clause/expose/
+   choice [1]: 3
+   checked: tailscale is up, this machine is mybox.tail1234.ts.net
+   approval links will use https://mybox.tail1234.ts.net
 
 3. Connect a chat channel (Telegram, Discord, fakechat, …)? [y/N] ⏎
 
@@ -320,8 +361,8 @@ $ escape-clause doctor ~/my-project
       config says profile "strict"; stamp was written with "default"
       fix: escape-clause init ~/my-project   (re-stamps from the config)
   ✓ ports: UI 8790 and proxy 8791 held by a live broker
-  ✗ ui.url is https://mybox.tail1234.ts.net but tailscale serve is not active
-      fix: tailscale serve --bg 8790
+  ✗ expose provider 'tailscale': serve is not active for port 8790
+      fix: tailscale serve --bg 8790   (the broker re-runs the provider on restart)
 
 2 problems, 2 fixes printed above.
 ```
@@ -337,8 +378,87 @@ whose whole job is naming the drifted setting and printing the fix.
 | Every later session | re-export the same vars, `~/.escape-clause/app/escape-clause.sh launch <dir>` | `escape-clause launch <dir>` |
 | Where choices live | your shell history + memory | one JSON file per workspace, agent-inaccessible |
 | Add a channel | install plugin, 2 exports, re-init, exports forever | `init --reconfigure`, answer one question |
-| Remote approvals | know about tailscale, serve, export URL, re-init | wizard detects and offers it |
+| Remote approvals | know about tailscale, serve, export URL, re-init | pick a provider in the wizard: your URL, tailscale, or your own script |
 | Drift refusal | "not what init would write" — go figure out why | `doctor` names the setting and prints the fix |
+| Upgrade | pull, reinstall, restart every session | `escape-clause update` — sessions stay up |
+
+## Upgrades: new code without a new session
+
+Today an upgrade is: pull the clone, re-run `install`, then restart **every running
+session** — because the broker is a stdio child of the `claude` process, and it is one
+process wearing four hats (MCP server, channel, approval UI, egress proxies). Kill it
+and the session loses its broker; keep the session and the old code keeps running.
+
+### `escape-clause update`
+
+`install` records the clone path in the store; `update` then pulls it, shows what
+changed (`git log --oneline old..new`), re-runs the install copy + `npm install`, and
+offers to restart the broker:
+
+```console
+$ escape-clause update
+fetching tbuckley/escape-clause… 12 new commits
+  a1b2c3d Add exposure providers
+  d4e5f6a doctor: check channel plugins
+  …
+staged to ~/.escape-clause/app
+restart the broker to apply? [Y/n] y
+daemon restarted — 2 sessions reconnected, 0 pending tickets lost
+```
+
+Deliberately **not** auto-update: this code runs with host privileges, so fetching it
+is an explicit human command that shows you the diff summary before anything restarts.
+
+### The restart problem, honestly
+
+Can the broker restart under a live session *today*? Partially, and fragilely. The
+durable half is already solved — tickets, the counter, policies, and the audit log
+live on disk, and the deny-all proxies fail closed even while their listeners are down
+(`proxy.mjs` documents this). But the process itself belongs to the session: only the
+session can respawn its stdio child. `/mcp` reconnect plausibly covers the MCP-server
+hat with fresh code; whether the *channel* hat (the outcome-push path) re-establishes
+on reconnect is unverified preview behavior. Not a foundation to build a button on.
+
+### Structural fix: split the shim from the daemon
+
+```
+claude ──stdio── broker-shim.mjs ──unix socket── escape-clause daemon
+                 (per session,     (~/.escape-clause/     ├─ approval UI :8790
+                  a few dozen        run/broker.sock)     ├─ deny-all proxies :8791/2
+                  boring lines)                           ├─ tickets · policies · reviewer
+                                                          └─ exposure provider child
+```
+
+- **The daemon owns everything upgradeable.** Restarting it is exec-ing its new self;
+  state is already on disk. During the blip, the shim retries the socket for a few
+  seconds, so an in-flight MCP call looks like a slow tool call — the session never
+  notices, and channels don't need to re-handshake with claude because the shim's
+  stdio connection never dropped.
+- **The shim is the only code pinned to session lifetime**, and it's deliberately too
+  boring to change: forward bytes, retry the socket. On the rare release that does
+  touch it, the release notes say "session restart required" — the exception, not the
+  rule.
+- Bonus: multiple workspaces share one daemon cleanly. Today a second concurrent
+  session spawns a second broker that loses the port bind; under the split, every
+  shim dials the same socket.
+
+### The UI button
+
+With the split, the button the issue asks for is small and safe: a Settings view in
+the authenticated UI shows *installed* vs *staged* version, and **Restart broker**
+tells the daemon to exec itself. What the button deliberately does **not** do is fetch:
+downloading and executing new code from a web-reachable button is a bigger attack
+surface than a loopback tool needs, especially once the UI is on a tailnet. Fetching
+stays on the CLI (`update` stages it); the button — or `update`'s own prompt — applies
+what's staged.
+
+### Agent-triggered updates: no
+
+No dedicated permission, tool, or ticket class for the agent to update the broker.
+An agent-influenced upgrade of host-privileged code is precisely the channel this
+project exists to close. The agent can always *say* "a newer broker fixes this" in a
+ticket justification — quarantined as an untrusted claim like everything else it says —
+and a human runs `update`.
 
 ## Alternatives considered
 
@@ -371,9 +491,14 @@ UI exists only after install/init, and a terminal wizard is strictly less machin
 Worth revisiting as a *config editor* once the file format exists. Deferred.
 
 **An arbitrary user command run from `~/.escape-clause` at launch** (from the issue).
-Maximum flexibility, but it's an exec-from-config primitive on the host — the exact
-shape of hole this project exists to close. The tailscale integration above covers the
-motivating case with a named, auditable behavior instead. Rejected.
+As a general-purpose hook: rejected — an exec-from-config primitive with no stated
+job is the softest target in the system, and impossible to audit ("what does this
+line do?" has no bounded answer). But every motivating case turned out to be "get the
+approval UI somewhere my other devices can reach," so the proposal keeps the
+capability and narrows the contract: exposure providers (§3) are named scripts in the
+broker's own trust domain with one job and one output. General pre-launch hooks stay
+out; a second *scoped* provider interface can be carved the same way if a real second
+need appears.
 
 ## Phasing
 
@@ -382,8 +507,13 @@ motivating case with a named, auditable behavior instead. Rejected.
    (Worth moving `stamp` from heredoc-sh into a small `init.mjs` at the same time —
    JSON-in-shell is where the quoting checks live today.)
 2. **Interactive wizard** on `init`, flags for non-TTY, `--reconfigure`; the
-   `~/.local/bin` symlink in `install`.
-3. **`doctor`**, and `launch`'s drift error points at it. Tailscale detect/offer.
+   `~/.local/bin` symlink in `install`; exposure via static `ui.url` + the built-in
+   `tailscale` provider.
+3. **`doctor`**, and `launch`'s drift error points at it; custom `script:` exposure
+   providers.
 4. **Session-start verification hook**, channel-flag upstreaming — separate proposal.
+5. **Upgrades**: `escape-clause update`, the shim/daemon split, and the UI restart
+   button. The split is the largest single change in this document and can land
+   before or after phase 4 — they're independent.
 
 Each phase lands independently and keeps the current commands working.
