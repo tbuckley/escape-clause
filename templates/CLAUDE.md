@@ -9,6 +9,14 @@ args)` tells you whether a run would auto-approve or need human review.
 - `request_action({command: [argv...], reason})` — raw commands always file a ticket.
 - `register_policy(name, script, class, description)` — propose a reusable policy script
   for something you'll need repeatedly; the human reviews the script itself.
+- `cancel_request({ticket} | {tickets: [...]} | {all: true}, reason?)` — withdraw your
+  own pending tickets, no human needed (rejection-only; nothing executes). Use it to
+  clean up requests that are stale, superseded, or filed by mistake.
+
+Execution defaults: runs happen with cwd = your workspace and a 15s timeout. If you need
+different, pass `cwd` (absolute path) and/or `timeout_ms` (up to 600000) to
+`request_action` — they're shown to the reviewer with the request. A cwd outside the
+workspace always needs human review, even for auto-approved policy classes.
 
 Tickets are NON-BLOCKING: you get `{ticket, status: "pending"}` back immediately. A
 pending ticket is not a failure — continue other work; do not poll. The outcome arrives

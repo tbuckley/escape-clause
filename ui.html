@@ -25,7 +25,7 @@
   .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .id{font-weight:700;font-family:ui-monospace,Menlo,monospace}
   .tag{font-size:11px;padding:2px 8px;border-radius:99px;background:#e8ebf0;color:#3d4550}
-  .tag.approved{background:#dcf2df;color:#1d7a2e}.tag.rejected{background:#fbe3e3;color:#b3261e}.tag.pending{background:#fdf1de;color:#9a6b00}
+  .tag.approved{background:#dcf2df;color:#1d7a2e}.tag.rejected{background:#fbe3e3;color:#b3261e}.tag.pending{background:#fdf1de;color:#9a6b00}.tag.cancelled{background:#e8ebf0;color:#5b6472}
   .tag.autorun{background:#fbe3e3;color:#b3261e}.tag.perrun{background:#dcf2df;color:#1d7a2e}
   .risk{font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px}
   .risk-low{background:#dcf2df;color:#1d7a2e}.risk-medium{background:#fdf1de;color:#9a6b00}.risk-high{background:#fbe3e3;color:#b3261e}
@@ -280,6 +280,15 @@ function focusTicket(id){
 }
 
 // ---------- ticket cards ----------
+// Agent-chosen execution overrides (defaults: cwd = the launch workspace, 15s timeout)
+// — snapshotted in the ticket, so what's shown here is what an approval runs with.
+function execTags(t){
+  if(!t.cwd&&!t.timeout_ms)return ''
+  var h='<div class="row" style="margin-top:6px">'
+  if(t.cwd)h+='<span class="tag">cwd: '+esc(t.cwd)+'</span>'
+  if(t.timeout_ms)h+='<span class="tag">timeout: '+esc(t.timeout_ms/1000)+'s</span>'
+  return h+'</div>'
+}
 function facts(t){
   var h=''
   if(t.kind==='permission'){
@@ -293,12 +302,15 @@ function facts(t){
     h+='<div class="lbl">Exact command — approving runs exactly this '
     h+='<a href="#" data-act="view" data-id="'+esc(cid)+'" data-v="'+(rawv?'':'argv')+'">'+(rawv?'shell view':'raw argv')+'</a></div>'
     h+=codeBlock(cid,rawv?argvJson(t.command||[]):shq(t.command||[]),rawv?{}:{sh:true})
+    h+=execTags(t)
   }
   if(t.kind==='policy'){
     h+='<div class="lbl">Policy run — approving runs the installed script once with these args '
     h+='<a href="#" data-act="policy" data-id="'+esc(t.policy)+'">view installed script →</a></div>'
     h+=codeBlock(t.ticket+':prun',shq([t.policy].concat((t.args||[]).map(String))),{sh:true})
     h+='<div class="row" style="margin-top:6px"><span class="tag">class: '+esc(t.policyClass)+'</span><span class="tag perrun">each run needs approval</span></div>'
+    h+=execTags(t)
+    if(t.cwd&&AUTO[t.policyClass])h+='<div class="banner info">Class '+esc(t.policyClass)+' normally auto-runs — this run needs review because the agent chose a cwd outside the workspace.</div>'
   }
   if(t.kind==='policy-registration')h+=regFacts(t)
   return h
@@ -347,7 +359,8 @@ function card(t){
     h+='<button class="no" data-act="deny" data-id="'+esc(t.ticket)+'">Deny</button>'
     h+='<input type="text" id="msg-'+esc(t.ticket)+'" placeholder="optional message back to the agent (sent on deny)"></div>'
   } else {
-    if(t.note)h+='<div class="lbl">Decision note</div><div>'+esc(t.note)+'</div>'
+    if(t.status==='cancelled')h+='<div class="banner info">Withdrawn by the agent (no human involved — cancellation only ever prevents execution).</div>'
+    if(t.note)h+='<div class="lbl">'+(t.status==='cancelled'?'Agent’s withdrawal note (untrusted)':'Decision note')+'</div><div>'+esc(t.note)+'</div>'
     if(t.output)h+='<div class="lbl">Output</div>'+codeBlock(t.ticket+':out',t.output,{})
   }
   return h+'</div>'

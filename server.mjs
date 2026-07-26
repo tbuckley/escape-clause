@@ -1,6 +1,7 @@
-// Approval web UI + resolution API. This is the ONLY place a ticket can be resolved:
-// the MCP surface (broker.mjs) can create and read tickets but has no resolve tool, so
-// there is no code path from an agent-invokable interface to an approval.
+// Approval web UI + resolution API. This is the ONLY place a ticket can be APPROVED:
+// the MCP surface (broker.mjs) can create tickets and withdraw its own pending ones
+// (cancel_request — strictly rejection-only), but has no approve tool, so there is no
+// code path from an agent-invokable interface to an approval.
 //
 // Reaching it: binds 127.0.0.1 only (never 0.0.0.0); the sandbox's empty network
 // allowlist blocks the agent from localhost entirely (verified — see the audit's Part E).

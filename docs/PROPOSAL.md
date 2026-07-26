@@ -73,8 +73,9 @@ server-sent events for live updates, in keeping with the example's size.
 
 - *The agent can never reach it.* Three independent layers, all already in place or
   free: the sandbox's empty `allowedDomains` blocks bash from localhost (verified);
-  the MCP surface has **no resolve tool** — tools can create and read tickets, never
-  transition them, so there is no code path from an agent-invokable interface to an
+  the MCP surface has **no approve tool** — tools can create and read tickets, and
+  withdraw the agent's own pending ones (`cancel_request`, strictly rejection-only), but
+  never approve, so there is no code path from an agent-invokable interface to an
   approval; and the API requires a login session minted from the password in
   `~/.escape-clause/secrets/password`, which is denyRead- and guard-protected.
 - *Only the user can resolve tickets.* Bind `127.0.0.1` explicitly (never `0.0.0.0`).
@@ -107,8 +108,9 @@ executable + a manifest declaring its class:
 |---|---|
 | `list_policies()` | Names, descriptions, classes, arg hints. Free. |
 | `check_policy(policy, args)` | Dry run: `auto_approve` / `needs_approval` / `unknown_policy`, plus which class matched. Lets the agent avoid spurious tickets. |
-| `request_action({command} \| {policy, args}, reason)` | Extended: raw argv always files a ticket (unchanged); `{policy, args}` consults the class — auto-approve classes execute inline and return output, review classes file a ticket. |
+| `request_action({command} \| {policy, args}, reason, cwd?, timeout_ms?)` | Extended: raw argv always files a ticket (unchanged); `{policy, args}` consults the class — auto-approve classes execute inline and return output, review classes file a ticket. Optional `cwd` (absolute) and `timeout_ms` (1s–10min) override the execution defaults below and are snapshotted into the ticket; a cwd outside the workspace always files a ticket, even for auto-approve classes. |
 | `register_policy(name, script, class, description)` | **Itself an escalation.** Files a `policy-registration` ticket; the UI renders the full script (and a diff against the existing version, if updating) plus the reviewer's script analysis. On approval the broker writes the bytes to its private store and pins the sha256. |
+| `cancel_request({ticket} \| {tickets} \| {all: true}, reason?)` | Withdraws the agent's own pending tickets with no human involved — the one agent-invokable state transition, and strictly rejection-only: nothing executes, a cancelled ticket can never be approved afterwards, and relayed permission prompts are excluded. For cleaning up stale or superseded requests. |
 
 **Execution semantics** (straight from parent-§2, all cheap to honor):
 
@@ -120,8 +122,10 @@ executable + a manifest declaring its class:
   The agent can rewrite its workspace copy of a script all day; the approved bytes run.
   An *update* re-enters review with an old→new diff, which is the alert-fatigue win:
   the human reviews script changes, not script runs.
-- Env scrubbed to a minimal set, cwd = the agent workspace, 15s timeout as today,
-  output above ~8KB written to a workspace file and returned by path.
+- Env scrubbed to a minimal set; defaults of cwd = the agent workspace and a 15s
+  timeout, overridable per request via `cwd`/`timeout_ms` (documented in the tool
+  schema; overrides ride in the ticket snapshot the human approves). Output above ~8KB
+  written to a workspace file and returned by path.
 
 **Seed policies** shipped with the example, so the demo shows both classes:
 
@@ -175,13 +179,17 @@ ground truth rather than config inspection:
 
 - **Part E — UI unreachable from the sandbox.** From inside a sandboxed session, `curl
   127.0.0.1:8790` and attempt every agent-facing route; assert no ticket state changes
-  and no token leaks. Also assert the MCP tool list contains no resolve/approve tool.
+  and no token leaks. Also assert the MCP tool list contains no resolve/approve tool,
+  and that `cancel_request` is rejection-only: a cancelled ticket cannot be approved
+  afterwards and nothing runs.
 - **Part F — hash pinning holds.** Register a policy, approve it (by POSTing to the
   approve endpoint with the token — the audit runs unsandboxed as the user), then modify
   the workspace copy of the script and trigger the policy; assert the *original* bytes
   ran (marker in output). This is the behavioral TOCTOU test.
 - **Part G — auto-approve stays in class.** `request_action({policy: "host-info"})`
-  executes with no ticket; a raw argv request never auto-executes.
+  executes with no ticket; a raw argv request never auto-executes; an auto-approve
+  policy asked to run with a cwd outside the workspace files a ticket instead of
+  auto-running.
 
 ## Build order
 

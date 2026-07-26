@@ -16,9 +16,12 @@ Three independent layers:
 1. The sandbox routes all egress to the deny-all proxy (empty `allowedDomains` behind
    it), blocking bash from **all** hosts including localhost — so the agent can't even
    reach the approval UI's port (verified by the audit's Part E).
-2. The MCP surface has **no resolve tool** — by construction there is no code path from
-   an agent-invokable interface to a ticket-state transition. Resolution exists only on
-   the web UI's authenticated endpoints.
+2. The MCP surface has **no approve tool** — by construction there is no code path from
+   an agent-invokable interface to an approval. Approval exists only on the web UI's
+   authenticated endpoints. (The one agent-invokable state transition, `cancel_request`,
+   goes strictly the safe direction: it withdraws the agent's own pending tickets —
+   rejection-only, nothing ever executes, and a cancelled ticket can no longer be
+   approved.)
 3. Approve/deny require a **login session**: the password lives in
    `~/.escape-clause/secrets/password` (denyRead- and guard-protected), and the session
    rides in an HttpOnly `SameSite=Lax` cookie the page's JS can't read. Every API route
