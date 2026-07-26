@@ -37,7 +37,9 @@ const PORT = Number(process.env.ESCAPE_CLAUSE_UI_PORT || 8790)
 // reverse proxy (Tailscale, ngrok, a domain) so the link the agent shares is reachable.
 // Deliberately TOKEN-FREE: this is the one URL the sandboxed agent is allowed to know and
 // relay to a user; it must never carry the approval token (the token gates approve/deny).
-const UI_URL = (process.env.ESCAPE_CLAUSE_UI_URL || `http://127.0.0.1:${PORT}`).replace(/\/+$/, '')
+// `let`, not `const`: an exposure provider (expose.mjs) may report the public URL
+// after startup, at which point new ticket links switch over to it.
+let UI_URL = (process.env.ESCAPE_CLAUSE_UI_URL || `http://127.0.0.1:${PORT}`).replace(/\/+$/, '')
 const ticketUrl = (id) => `${UI_URL}/?req=${encodeURIComponent(id)}`
 const log = (m) => { const s = `[${new Date().toISOString().slice(11, 19)}] ${m}\n`; appendFileSync(join(DIR, 'broker.log'), s); process.stderr.write(s) }
 
@@ -472,5 +474,15 @@ mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
 const ui = startServer({ port: PORT, resolveTicket, log })
 const PROXY_PORT = Number(process.env.ESCAPE_CLAUSE_PROXY_PORT || 8791)
 startProxy({ port: PROXY_PORT, socksPort: PROXY_PORT + 1, log, audit })
+// Exposure provider (stamped into .mcp.json from the workspace config): arranges a
+// reachable URL for the loopback-only UI and reports it; links switch over when it does.
+const EXPOSE = (process.env.ESCAPE_CLAUSE_EXPOSE || '').trim()
+if (EXPOSE) {
+  const { startExpose } = await import('./expose.mjs')
+  startExpose({ mode: EXPOSE, port: PORT, log, onUrl: (u) => {
+    UI_URL = u.replace(/\/+$/, '')
+    log(`expose: approval links now use ${UI_URL}`)
+  } })
+}
 await mcp.connect(new StdioServerTransport())
 log(`broker up (stdio MCP + channel, relay=${RELAY}). store: ${DIR}`)

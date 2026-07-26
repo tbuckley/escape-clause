@@ -1,5 +1,9 @@
 # Proposal: simplifying setup (issue #16)
 
+> **Status:** phases 1–3 are implemented — `setup.mjs` (config files, registry, wizard,
+> stamping, self-explaining verification), `expose.mjs` (exposure providers), and the
+> slimmed `escape-clause.sh`. Phase 4 (session-start hook) remains a follow-up.
+
 Today a correct setup is three commands from two different locations, up to eleven
 `ESCAPE_CLAUSE_*` environment variables, a scary-looking `claude` flag, and — for
 remote use — a Tailscale side-quest plus a re-init. Worse, the env vars are not just
