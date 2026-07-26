@@ -205,6 +205,141 @@ The launcher does exactly two things: drift verification, and the
 This is deliberately phased last: it changes the trust story (verification at session
 start instead of before exec) and deserves its own review.
 
+## The DX, end to end
+
+What a user actually types and sees, phases 1–3 landed. Four moments matter: first
+contact, day two, changing your mind, and something's wrong.
+
+### First contact (once per machine)
+
+```console
+$ git clone https://github.com/tbuckley/escape-clause.git && cd escape-clause
+$ ./escape-clause.sh install
+
+Installed the broker to ~/.escape-clause/app (agent-inaccessible).
+
+Web UI:    http://127.0.0.1:8790  — sign in with the password below
+Password:  hazel-mint-crater-42
+           (file: ~/.escape-clause/secrets/password — overwrite it to choose your own)
+
+Put 'escape-clause' on your PATH (symlink in ~/.local/bin)? [Y/n] y
+
+Next: escape-clause init ~/my-project
+```
+
+From here on it's one word from any directory, any shell — no more
+`~/.escape-clause/app/escape-clause.sh` paths.
+
+### First workspace (once per project)
+
+```console
+$ escape-clause init ~/my-project
+
+Workspace: ~/my-project  (new)
+
+1. How much of your machine should the agent see?
+     1) default   – credentials (~/.ssh, ~/.aws, …) hidden; rest of ~ visible
+     2) strict    – everything under ~ hidden except this workspace   (recommended)
+     3) paranoid  – workspace + system toolchain only
+   choice [2]: ⏎
+
+2. Will you approve requests from another device (phone/laptop)?
+     Approval links default to http://127.0.0.1:8790, which only works on this
+     machine.
+   detected: tailscale is running, this machine is mybox.tail1234.ts.net
+   expose the approval UI at https://mybox.tail1234.ts.net? [y/N] y
+   ran: tailscale serve --bg 8790
+
+3. Connect a chat channel (Telegram, Discord, fakechat, …)? [y/N] ⏎
+
+4. Permission relay for unlisted tools:  deny (recommended) / forward / off  [deny]: ⏎
+
+Saved ~/.escape-clause/configs/my-project.json — plain JSON, edit any time,
+then re-run 'escape-clause init ~/my-project' to re-stamp.
+
+Stamped ~/my-project (plain JSON, read them):
+  .claude/settings.json               sandbox + permissions + guard hook
+  .claude/settings.local.json         pre-trusts the broker MCP server
+  .claude/escape-clause-policy.json   file-tool directory policy
+  .mcp.json                           the broker server + its env
+
+Launch with: escape-clause launch ~/my-project
+```
+
+Thirty seconds, four questions, three of them a bare ⏎. Nothing to export, nothing to
+remember, no docs required before the first session — the docs become depth, not
+prerequisite.
+
+### Day two, and every day after
+
+```console
+$ escape-clause launch ~/my-project
+
+workspace:   ~/my-project  (stamp verified against configs/my-project.json)
+profile:     strict          approval UI: https://mybox.tail1234.ts.net
+channels:    none            relay: deny
+
+Launching claude — this is the entire command, run it yourself any time:
+
+  cd ~/my-project
+  claude --dangerously-load-development-channels server:broker
+```
+
+This is the whole story: **one command, any shell, forever.** New terminal, after a
+reboot, from a cron job — identical, because the config that decides what launches is
+a file, not whatever the shell remembered to export. (Under phase 4, `cd ~/my-project
+&& claude` joins this list — the SessionStart hook does the same verification.)
+
+### Changing your mind
+
+Add a channel two weeks in — today this is a plugin install, two exports, a re-init,
+and keeping those exports forever. Proposed:
+
+```console
+$ escape-clause init ~/my-project --reconfigure
+```
+
+Same wizard, seeded with current answers; touch ⏎ through what's unchanged. Or skip
+the wizard entirely: edit `~/.escape-clause/configs/my-project.json` in your editor,
+then `escape-clause init ~/my-project` re-stamps from it. Both paths end at the same
+plain file.
+
+### Something's wrong
+
+```console
+$ escape-clause launch ~/my-project
+error: workspace stamp doesn't match its config — run: escape-clause doctor ~/my-project
+
+$ escape-clause doctor ~/my-project
+
+  ✓ node v22.3.0 (need ≥ 20)
+  ✓ claude v2.1.202 on PATH (last tested: v2.1.202)
+  ✓ broker installed, store perms 700, password file present
+  ✓ config: configs/my-project.json parses; workspace registered
+  ✗ stamp drift: .claude/settings.json differs from config
+      config says profile "strict"; stamp was written with "default"
+      fix: escape-clause init ~/my-project   (re-stamps from the config)
+  ✓ ports: UI 8790 and proxy 8791 held by a live broker
+  ✗ ui.url is https://mybox.tail1234.ts.net but tailscale serve is not active
+      fix: tailscale serve --bg 8790
+
+2 problems, 2 fixes printed above.
+```
+
+Refusal stays hard (launch never rewrites), but the *explanation* moves to a tool
+whose whole job is naming the drifted setting and printing the fix.
+
+### Before and after
+
+| | Today | Proposed |
+|---|---|---|
+| First session ever | clone, install, read docs, export vars, init, launch | clone, install, wizard, launch |
+| Every later session | re-export the same vars, `~/.escape-clause/app/escape-clause.sh launch <dir>` | `escape-clause launch <dir>` |
+| Where choices live | your shell history + memory | one JSON file per workspace, agent-inaccessible |
+| Add a channel | install plugin, 2 exports, re-init, exports forever | `init --reconfigure`, answer one question |
+| Remote approvals | know about tailscale, serve, export URL, re-init | wizard detects and offers it |
+| Drift refusal | "not what init would write" — go figure out why | `doctor` names the setting and prints the fix |
+
 ## Alternatives considered
 
 **Config file in the workspace** (`escape-clause.json` next to `.claude/`). Natural
