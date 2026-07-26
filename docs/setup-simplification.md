@@ -11,8 +11,8 @@ place we could have picked.
 
 This proposes moving workspace configuration into **named, human-readable config files
 in the protected store** (`~/.escape-clause/configs/<name>.json`), fed by an
-**interactive question-by-question `init`**, checked by a **`doctor`** command, and —
-longer term — verified by a **SessionStart hook** so that plain `claude` becomes a
+**interactive question-by-question `init`**, guarded by a **`launch` that explains its
+own refusals**, and — longer term — verified by a **SessionStart hook** so that plain `claude` becomes a
 legitimate way to start a session and the launcher becomes optional sugar. It also
 covers a pluggable **exposure provider** interface (tailscale and its successors as
 one narrow contract).
@@ -186,39 +186,35 @@ the config line that names it. And the contract is deliberately narrow — one j
 (produce a URL for one port), one output, named in plain sight in the config — which
 is what separates it from the general exec-from-config hook rejected below.
 
-### 4. `doctor`
+### 4. Refusals that explain themselves
 
-The owner's comment on #16 suggests exactly this, and it pairs naturally with the
-config file — verification gets a home that *explains* instead of refusing:
+Every check gets a home at the moment its failure is actionable, instead of a
+separate diagnostic command (an earlier draft had a `doctor`; why it's gone is in the
+alternatives):
 
-```
-escape-clause doctor [dir]
-```
-
-checks, with a fix-it line per failure:
-
-- node ≥ 20, `claude` on PATH and its version vs. the last-tested version
-- broker installed at `$BASE/app`, store perms `700`, password file present
-- workspace registered, config file parses, stamp matches config (the launch check,
-  but with a diff of *which* file and *which* setting drifted)
-- UI/proxy ports free or already held by a live broker
-- if the config sets an exposure provider: it's runnable, active, and the URL it
-  reports is the one links are using
-- channel plugins from the config actually installed
-
-`launch` keeps its hard verification but its error message becomes one line:
-`config drift — run: escape-clause doctor <dir>`.
+- **`launch` diagnoses its own refusal.** It already computes the config-vs-stamp
+  comparison in order to refuse; on mismatch it names the file and the setting and
+  prints the fix (transcript in the DX section). Verification stays hard — launch
+  still never rewrites — but the explanation is inline, not a referral.
+- **`init` owns pre-flight.** node ≥ 20, `claude` on PATH and its version vs. the
+  last-tested one, broker installed, store perms `700`, config parses, channel
+  plugins present — checked while the user is already in setup mode and can act.
+- **Runtime health lives in the approval UI.** What breaks *after* a successful
+  launch — the tunnel dies, a listener loses its port — is state the broker already
+  owns (it supervises the exposure provider and holds the ports). A status line in
+  the UI ("tunnel: down since 14:02, links falling back to 127.0.0.1") reaches you at
+  the moment approval links stop working, which beats a host-side command you'd have
+  to think to run.
 
 ### 5. Command surface after
 
-Matches the comment on the issue, plus a PATH nicety: `install` symlinks
+Three commands, each one you'd run anyway, plus a PATH nicety: `install` symlinks
 `~/.local/bin/escape-clause` → `$APP/escape-clause.sh` (asking first), so every
 subsequent command is the same short word regardless of where it lives:
 
 ```
 ./escape-clause.sh install       # once, from the clone
 escape-clause init <dir>         # wizard on a TTY; flags for scripts
-escape-clause doctor [dir]       # explain what's wrong, if anything
 escape-clause launch [dir]       # verify + print + exec claude (unchanged contract)
 ```
 
@@ -231,8 +227,8 @@ The launcher does exactly two things: drift verification, and the
 - **Verification can move into the session.** A stamped `SessionStart` hook (loaded
   from the protected install, fail-closed like the guard) can perform the same
   config-vs-stamp comparison when *any* `claude` starts in the workspace, and block
-  the session with the doctor message on drift. Then plain `claude` is safe — the
-  launcher stops being load-bearing.
+  the session with the same self-explaining refusal on drift. Then plain `claude` is
+  safe — the launcher stops being load-bearing.
 - **The flag is an upstream constraint.** Channels currently load only via CLI flag;
   the broker MCP server side already loads from `.mcp.json`. If/when Claude Code
   supports channel config in `settings.json`, the stamp covers it and `launch` becomes
@@ -347,26 +343,19 @@ plain file.
 
 ```console
 $ escape-clause launch ~/my-project
-error: workspace stamp doesn't match its config — run: escape-clause doctor ~/my-project
+error: workspace stamp doesn't match its config
 
-$ escape-clause doctor ~/my-project
+  .claude/settings.json drifted: config says profile "strict";
+  the stamp was written with "default" — likely an edit to
+  configs/my-project.json that was never re-stamped.
 
-  ✓ node v22.3.0 (need ≥ 20)
-  ✓ claude v2.1.202 on PATH (last tested: v2.1.202)
-  ✓ broker installed, store perms 700, password file present
-  ✓ config: configs/my-project.json parses; workspace registered
-  ✗ stamp drift: .claude/settings.json differs from config
-      config says profile "strict"; stamp was written with "default"
-      fix: escape-clause init ~/my-project   (re-stamps from the config)
-  ✓ ports: UI 8790 and proxy 8791 held by a live broker
-  ✗ expose provider 'tailscale': serve is not active for port 8790
-      fix: tailscale serve --bg 8790   (the broker re-runs the provider on restart)
-
-2 problems, 2 fixes printed above.
+  fix: escape-clause init ~/my-project   (re-stamps from the config)
 ```
 
-Refusal stays hard (launch never rewrites), but the *explanation* moves to a tool
-whose whole job is naming the drifted setting and printing the fix.
+Refusal stays hard — launch never rewrites — but it names the drifted setting and
+prints the fix itself, no second command to run. Problems that arise *after* a
+successful launch (the tunnel drops, a port is lost) surface as a status line in the
+approval UI, where you'll actually be looking when links stop working.
 
 ### Before and after
 
@@ -377,7 +366,7 @@ whose whole job is naming the drifted setting and printing the fix.
 | Where choices live | your shell history + memory | one JSON file per workspace, agent-inaccessible |
 | Add a channel | install plugin, 2 exports, re-init, exports forever | `init --reconfigure`, answer one question |
 | Remote approvals | know about tailscale, serve, export URL, re-init | pick a provider in the wizard: your URL, tailscale, or your own script |
-| Drift refusal | "not what init would write" — go figure out why | `doctor` names the setting and prints the fix |
+| Drift refusal | "not what init would write" — go figure out why | launch names the setting and prints the fix |
 
 ## Alternatives considered
 
@@ -395,14 +384,24 @@ simpler to read, diff, and verify. Rejected.
 
 **YAML for the config.** More comment-friendly, but it's a parser dependency and a
 famously surprising spec (`no` → `false`) in the one file where surprise is a security
-bug. Plain JSON with good field names, a wizard that writes it, and `doctor` to check
-it covers the readability goal. If comments prove essential, JSON with a tolerated
+bug. Plain JSON with good field names, a wizard that writes it, and `init`/`launch`
+validating it covers the readability goal. If comments prove essential, JSON with a tolerated
 `"//"` key costs nothing. Rejected for now.
 
 **No config file — smarter flags** (`launch --profile strict` auto-restamps on
 change). Keeps every current problem (choices live in the user's head/history) and
 adds a worse one: launch rewriting config on mismatch is precisely the "silently fix
 drift" behavior we refuse today. Rejected.
+
+**A separate `doctor` command** (from the issue discussion; present in an earlier
+draft of this document). Cut because its dominant flow was pure indirection: launch
+detects drift, refuses, tells you to run doctor — which re-detects the same drift
+with information launch already had. So launch explains itself (§4), init owns
+pre-flight, and post-launch runtime health surfaces in the approval UI, where the
+broker (which owns that state) can put it in front of you at the moment links break.
+The residual case — a one-shot environment report to paste into bug reports — is real
+but too thin to carry a fourth command; doctor can earn its way back if experience
+disagrees. Cut.
 
 **Web-based first-run setup in the approval UI.** Attractive later (the broker already
 serves a UI, and editing a config could live there), but it inverts the bootstrap: the
@@ -428,7 +427,8 @@ need appears.
 2. **Interactive wizard** on `init`, flags for non-TTY, `--reconfigure`; the
    `~/.local/bin` symlink in `install`; exposure via static `ui.url` + the built-in
    `tailscale` provider.
-3. **`doctor`**, and `launch`'s drift error points at it; custom `script:` exposure
+3. **Self-explaining refusals** — the named drift diff + fix in `launch`, pre-flight
+   checks in `init`, the runtime status line in the UI; custom `script:` exposure
    providers.
 4. **Session-start verification hook**, channel-flag upstreaming — separate proposal.
 
