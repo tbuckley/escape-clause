@@ -83,15 +83,21 @@ function parseExecOpts(a) {
   return { opts: o }
 }
 
-// Is an agent-supplied cwd inside the workspace subtree? realpath both sides, so a
-// symlink planted in the workspace can't smuggle an auto-run into a protected
-// directory; any resolution failure (nonexistent, unreadable) counts as outside and
-// therefore goes to human review — no error back to the agent, no existence oracle.
-function inWorkspace(cwd) {
+// Resolve an agent-supplied cwd and return its REAL path only if it lands inside the
+// workspace subtree; null = outside or unresolvable -> human review (no error back to
+// the agent, so no existence oracle). Auto-runs must execute with the RETURNED path,
+// never the raw request string — the raw string would be re-resolved by the kernel at
+// spawn time, so a symlink whose target is swapped after this check would move the run
+// elsewhere. Residual race: swapping a real directory component of the resolved path
+// itself between check and spawn (a same-tick window of pure JS) — every attempt costs
+// an audit-logged MCP call, and the payoff is bounded to an approved auto-class script
+// running with a different cwd.
+function resolveWorkspaceCwd(cwd) {
   try {
-    const rel = relative(realpathSync(WORKSPACE), realpathSync(cwd))
-    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
-  } catch { return false }
+    const real = realpathSync(cwd)
+    const rel = relative(realpathSync(WORKSPACE), real)
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel)) ? real : null
+  } catch { return null }
 }
 
 const experimental = { 'claude/channel': {} } // channel spec -> lets the broker PUSH notifications
@@ -148,8 +154,9 @@ const TOOLS = [
     name: 'cancel_request',
     description: 'Withdraw your own pending tickets — no human involved, and strictly rejection-only: nothing can ever ' +
       'execute through this tool. Use it to clean up requests that are stale, superseded, or filed by mistake. Give ' +
-      '{ticket: "REQ-N"}, {tickets: [...]}, or {all: true} (= every pending broker ticket). Relayed permission prompts ' +
-      '(PERM-*) are not cancellable — only the human answers those. Cancelled tickets stay in the audit trail and UI history.',
+      '{ticket: "REQ-N"}, {tickets: [...]}, or {all: true} (= every pending broker ticket of yours). Only tickets filed ' +
+      'from this session\'s workspace are reachable; relayed permission prompts (PERM-*) are not cancellable — only the ' +
+      'human answers those. Cancelled tickets stay in the audit trail and UI history.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -225,8 +232,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         const args = (a.args || []).map(String)
         // Auto-run keeps its class ONLY inside the workspace: an agent-chosen cwd
         // elsewhere (protected dirs, other repos, nonexistent probes) demotes to a ticket.
-        if (AUTO_CLASSES.has(p.class) && (!opts.cwd || inWorkspace(opts.cwd))) {
-          const r = await runPolicy(p.name, args, { cwd: opts.cwd, timeout: opts.timeout_ms })
+        const autoCwd = opts.cwd ? resolveWorkspaceCwd(opts.cwd) : undefined
+        if (AUTO_CLASSES.has(p.class) && (!opts.cwd || autoCwd)) {
+          const r = await runPolicy(p.name, args, { cwd: autoCwd, timeout: opts.timeout_ms })
           audit('auto_approved_run', { policy: p.name, class: p.class, args, exitCode: r.exitCode, ...opts })
           log(`AUTO-RUN ${p.name} ${JSON.stringify(args)} -> exit=${r.exitCode}`)
           return json({ status: 'executed', policy: p.name, class: p.class, exitCode: r.exitCode, ...capOutput(r, p.name) })
@@ -244,7 +252,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     case 'cancel_request': {
       const reason = String(a.reason || '')
       let ids
-      if (a.all === true) ids = listTickets().filter((t) => t.status === 'pending' && t.kind !== 'permission').map((t) => t.ticket)
+      if (a.all === true) ids = listTickets().filter((t) => t.status === 'pending' && t.kind !== 'permission' && t.workspace === WORKSPACE).map((t) => t.ticket)
       else if (Array.isArray(a.tickets) && a.tickets.length) ids = a.tickets.map(String)
       else if (typeof a.ticket === 'string') ids = [a.ticket]
       else return fail('give {ticket: "REQ-N"}, {tickets: [...]}, or {all: true}')
@@ -276,7 +284,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
 // ---------- tickets ----------
 function createTicket(fields) {
-  const t = { ticket: nextTicketId(), status: 'pending', created: new Date().toISOString(), ...fields }
+  // workspace = ownership: several sessions may share one store (server.mjs), and
+  // cancel_request must only reach tickets filed from this broker's own workspace.
+  const t = { ticket: nextTicketId(), status: 'pending', created: new Date().toISOString(), workspace: WORKSPACE, ...fields }
   saveTicket(t)
   audit('ticket_created', { ticket: t.ticket, kind: t.kind })
   log(`PENDING ${t.ticket} (${t.kind}) — review at http://127.0.0.1:${PORT}`)
@@ -309,7 +319,9 @@ function kickReviewer(t) {
 // Claude Code's own dialog and only the human (or relay=deny) answers them.
 function cancelTicket(id, reason) {
   const t = getTicket(id)
-  if (!t) return { ticket: id, error: 'unknown ticket' }
+  // Nonexistent and not-yours collapse to ONE answer: with a shared store, a
+  // distinguishable reply would let one session probe another's ticket ids.
+  if (!t || t.workspace !== WORKSPACE) return { ticket: id, error: 'unknown ticket' }
   if (t.kind === 'permission') return { ticket: id, error: 'permission prompts cannot be cancelled via MCP' }
   if (t.status !== 'pending') return { ticket: id, error: `already ${t.status}` }
   t.status = 'cancelled'
@@ -354,6 +366,11 @@ async function resolveTicket(id, verdict, message) {
     notify(id, 'rejected', `The human declined.${message ? ` Message from the human: ${message}` : ''} Do not retry the same request.`)
     return { ok: true }
   }
+
+  // Persist 'approved' BEFORE executing: a cancel_request racing in mid-run then reads
+  // a non-pending status and refuses, instead of stamping 'cancelled' over the record
+  // of something that really did execute. (Output is persisted by the save below.)
+  saveTicket(t)
 
   // Approved: execute exactly the snapshot in the ticket file (incl. cwd/timeout_ms —
   // the reviewer saw those alongside the argv).
@@ -438,6 +455,7 @@ mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
     kind: 'permission',
     status: 'pending',
     created: new Date().toISOString(),
+    workspace: WORKSPACE,
     tool_name: params.tool_name,
     description: params.description,
     input_preview: params.input_preview,
