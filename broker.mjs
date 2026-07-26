@@ -346,7 +346,7 @@ mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
   kickReviewer(t)
 })
 
-const ui = startServer({ port: PORT, baseUrl: UI_URL, resolveTicket, log })
+const ui = startServer({ port: PORT, resolveTicket, log })
 const PROXY_PORT = Number(process.env.ESCAPE_CLAUSE_PROXY_PORT || 8791)
 startProxy({ port: PROXY_PORT, socksPort: PROXY_PORT + 1, log, audit })
 await mcp.connect(new StdioServerTransport())

@@ -18,7 +18,7 @@ import { uiPassword, createSession, checkSession, destroySession, listTickets, a
 import { listPolicies, policyScript } from './policies.mjs'
 
 // Single self-contained page (no framework, no build step, no external requests) — see
-// ui.html. Served verbatim with __BASE_URL__ substituted; auth stays the HttpOnly cookie.
+// ui.html. Served verbatim; auth stays the HttpOnly cookie.
 const PAGE = readFileSync(new URL('./ui.html', import.meta.url), 'utf8')
 
 const COOKIE = 'escape_clause_session'
@@ -38,9 +38,8 @@ function sessionOf(req) {
   return null
 }
 
-export function startServer({ port, baseUrl, resolveTicket, log }) {
+export function startServer({ port, resolveTicket, log }) {
   uiPassword() // seed on first run so the file exists for the human to find
-  const page = PAGE.replace(/__BASE_URL__/g, baseUrl || `http://127.0.0.1:${port}`)
   const sseClients = new Set()
   const broadcast = () => { for (const c of sseClients) c.write('data: update\n\n') }
 
@@ -52,7 +51,7 @@ export function startServer({ port, baseUrl, resolveTicket, log }) {
     const path = new URL(req.url, 'http://127.0.0.1').pathname
     try {
       if (req.method === 'GET' && path === '/') {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(page)
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(PAGE)
         return
       }
       if (req.method === 'POST' && path === '/api/login') {

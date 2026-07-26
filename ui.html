@@ -1,8 +1,8 @@
 <!doctype html>
-<!-- Approval UI, served verbatim by server.mjs (which substitutes __BASE_URL__).
-     Same rules as ever: single self-contained page — no framework, no build step, no
-     external requests. Auth is the HttpOnly session cookie; page JS never sees a
-     credential, it only posts the password once at login. -->
+<!-- Approval UI, served verbatim by server.mjs. Same rules as ever: single
+     self-contained page — no framework, no build step, no external requests. Auth is the
+     HttpOnly session cookie; page JS never sees a credential, it only posts the password
+     once at login. -->
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="only light"><meta name="theme-color" content="#16181c">
 <title>Escape Clause broker — approvals</title>
@@ -109,7 +109,12 @@
   <section id="sec-policies" hidden><div id="policies"></div></section>
 </main>
 <script>
-function esc(s){var d=document.createElement('div');d.textContent=String(s==null?'':s);return d.innerHTML}
+// Escapes &,<,>,",' — safe as element text and inside double-quoted attributes. The other
+// invariant: interpolated ids/names ride in data-* attributes handled by the delegated
+// click listener below, never inside inline-JS strings, so there is no JS-string context
+// anywhere for a hostile value to break out of.
+function esc(s){var d=document.createElement('div');d.textContent=String(s==null?'':s)
+  return d.innerHTML.replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 function age(iso){if(!iso)return ''
   var s=Math.max(0,(Date.now()-Date.parse(iso))/1000)
   return s<60?Math.round(s)+'s ago':s<3600?Math.round(s/60)+'m ago':s<86400?Math.round(s/3600)+'h ago':Math.round(s/86400)+'d ago'}
@@ -156,7 +161,7 @@ function codeBlock(id,text,opts){
   var lines=raw.replace(/\n+$/,'').split('\n')
   var cut=opts.collapse!==false&&lines.length>8&&!EXP[id]
   var shown=cut?lines.slice(0,5):lines
-  var h='<div class="code"><button class="mini copy" onclick="copyCode(event,\''+id+'\')">copy</button>'
+  var h='<div class="code"><button class="mini copy" data-act="copy" data-id="'+esc(id)+'">copy</button>'
   h+='<pre class="cb'+(cut?' cut':'')+'">'
   for(var i=0;i<shown.length;i++){
     var body=opts.sh?hlSh(shown[i]):esc(shown[i])
@@ -164,14 +169,14 @@ function codeBlock(id,text,opts){
     h+='<span class="lct">'+(body||'\u200b')+'</span></div>' // zwsp keeps empty lines their height
   }
   h+='</pre>'
-  if(cut)h+='<button class="more" onclick="toggleExp(\''+id+'\')">▾ show all '+lines.length+' lines</button>'
-  else if(opts.collapse!==false&&lines.length>8)h+='<button class="more" onclick="toggleExp(\''+id+'\')">▴ collapse</button>'
+  if(cut)h+='<button class="more" data-act="exp" data-id="'+esc(id)+'">▾ show all '+lines.length+' lines</button>'
+  else if(opts.collapse!==false&&lines.length>8)h+='<button class="more" data-act="exp" data-id="'+esc(id)+'">▴ collapse</button>'
   return h+'</div>'
 }
 function toggleExp(id){EXP[id]=!EXP[id];renderAll()}
-function setView(id,v){VIEW[id]=v;renderAll();return false}
-function copyCode(ev,id){
-  var txt=CODE[id]||'',btn=ev.target
+function setView(id,v){VIEW[id]=v;renderAll()}
+function copyCode(btn,id){
+  var txt=CODE[id]||''
   function done(ok){btn.textContent=ok?'copied':'copy failed';setTimeout(function(){btn.textContent='copy'},1200)}
   function fallback(){
     var ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.opacity='0'
@@ -257,7 +262,7 @@ function priorBox(t){
   var p=priorDenial(t);if(!p)return ''
   var prev=p.prev
   var h='<div class="banner prior"><b>⚠ '+(p.identical?'Identical to':'Similar to')+' '
-  h+='<a href="#" onclick="return focusTicket(\''+esc(prev.ticket)+'\')">'+esc(prev.ticket)+'</a></b>, which you denied '+age(prev.resolved||prev.created)
+  h+='<a href="#" data-act="focus" data-id="'+esc(prev.ticket)+'">'+esc(prev.ticket)+'</a></b>, which you denied '+age(prev.resolved||prev.created)
   if(prev.note)h+=' with the note “'+esc(prev.note)+'”'
   h+='.'
   if(!p.identical){
@@ -272,7 +277,6 @@ function focusTicket(id){
   setTab(t&&t.status==='pending'?'pending':'history')
   var el=document.getElementById('t-'+id)
   if(el){el.classList.add('focus');el.scrollIntoView({behavior:'smooth',block:'center'})}
-  return false
 }
 
 // ---------- ticket cards ----------
@@ -287,12 +291,12 @@ function facts(t){
   if(t.kind==='command'){
     var cid=t.ticket+':cmd',rawv=VIEW[cid]==='argv'
     h+='<div class="lbl">Exact command — approving runs exactly this '
-    h+='<a href="#" onclick="return setView(\''+cid+'\',\''+(rawv?'':'argv')+'\')">'+(rawv?'shell view':'raw argv')+'</a></div>'
+    h+='<a href="#" data-act="view" data-id="'+esc(cid)+'" data-v="'+(rawv?'':'argv')+'">'+(rawv?'shell view':'raw argv')+'</a></div>'
     h+=codeBlock(cid,rawv?argvJson(t.command||[]):shq(t.command||[]),rawv?{}:{sh:true})
   }
   if(t.kind==='policy'){
     h+='<div class="lbl">Policy run — approving runs the installed script once with these args '
-    h+='<a href="#" onclick="return showPolicy(\''+esc(t.policy)+'\')">view installed script →</a></div>'
+    h+='<a href="#" data-act="policy" data-id="'+esc(t.policy)+'">view installed script →</a></div>'
     h+=codeBlock(t.ticket+':prun',shq([t.policy].concat((t.args||[]).map(String))),{sh:true})
     h+='<div class="row" style="margin-top:6px"><span class="tag">class: '+esc(t.policyClass)+'</span><span class="tag perrun">each run needs approval</span></div>'
   }
@@ -311,7 +315,7 @@ function regFacts(t){
   if(isUpdate){
     var vid=t.ticket+':reg',full=VIEW[vid]==='full'
     h+='<div class="lbl">'+(full?'Proposed script (full)':'Changes vs installed script')+' '
-    h+='<a href="#" onclick="return setView(\''+vid+'\',\''+(full?'':'full')+'\')">'+(full?'view diff':'view full script')+'</a></div>'
+    h+='<a href="#" data-act="view" data-id="'+esc(vid)+'" data-v="'+(full?'':'full')+'">'+(full?'view diff':'view full script')+'</a></div>'
     if(full)h+=codeBlock(vid+':s',r.script,{nums:true,sh:true})
     else{
       var d=diffLines(r.previousScript,r.script)
@@ -339,9 +343,9 @@ function card(t){
   h+=facts(t)+priorBox(t)+summary(t)
   h+='<div class="claim"><div class="lbl">Agent’s claim (untrusted — may be attacker-controlled)</div>'+esc(t.reason||'(none)')+'</div>'
   if(t.status==='pending'){
-    h+='<div class="actions"><button class="ok" onclick="act(\''+t.ticket+'\',\'approve\')">Approve once</button>'
-    h+='<button class="no" onclick="act(\''+t.ticket+'\',\'deny\')">Deny</button>'
-    h+='<input type="text" id="msg-'+t.ticket+'" placeholder="optional message back to the agent (sent on deny)"></div>'
+    h+='<div class="actions"><button class="ok" data-act="approve" data-id="'+esc(t.ticket)+'">Approve once</button>'
+    h+='<button class="no" data-act="deny" data-id="'+esc(t.ticket)+'">Deny</button>'
+    h+='<input type="text" id="msg-'+esc(t.ticket)+'" placeholder="optional message back to the agent (sent on deny)"></div>'
   } else {
     if(t.note)h+='<div class="lbl">Decision note</div><div>'+esc(t.note)+'</div>'
     if(t.output)h+='<div class="lbl">Output</div>'+codeBlock(t.ticket+':out',t.output,{})
@@ -366,13 +370,35 @@ function showPolicy(name){
   setTab('policies')
   var el=document.getElementById('p-'+name)
   if(el){el.classList.add('focus');el.scrollIntoView({behavior:'smooth',block:'center'})}
-  return false
 }
+// Delegated handler for every per-item control (see esc() note): the ids live in data-*
+// attributes, so nothing ticket- or policy-derived is ever parsed as JS.
+document.addEventListener('click',function(ev){
+  var el=ev.target.closest('[data-act]')
+  if(!el)return
+  if(el.tagName==='A')ev.preventDefault()
+  var id=el.getAttribute('data-id')
+  switch(el.getAttribute('data-act')){
+    case 'copy':copyCode(el,id);break
+    case 'exp':toggleExp(id);break
+    case 'view':setView(id,el.getAttribute('data-v')||'');break
+    case 'policy':showPolicy(id);break
+    case 'focus':focusTicket(id);break
+    case 'approve':act(id,'approve');break
+    case 'deny':act(id,'deny');break
+    case 'denyall':denyAll(Number(el.getAttribute('data-n'))||0);break
+  }
+})
 
 // ---------- tabs + render ----------
 function setTab(name){TAB=name;renderAll()}
 function renderAll(){
   CODE={}
+  // Re-renders can land at any moment (SSE updates, expand/view toggles) — carry any
+  // half-typed deny message (and its focus) across the innerHTML rebuild.
+  var saved={},mi,msgs=document.querySelectorAll('input[id^="msg-"]')
+  var focused=document.activeElement&&/^msg-/.test(document.activeElement.id||'')?document.activeElement.id:null
+  for(mi=0;mi<msgs.length;mi++)if(msgs[mi].value)saved[msgs[mi].id]=msgs[mi].value
   var p=TICKETS.filter(function(t){return t.status==='pending'})
   var r=TICKETS.filter(function(t){return t.status!=='pending'})
   document.getElementById('tab-pending').innerHTML='Pending'+(p.length?'<span class="cnt">'+p.length+'</span>':'')
@@ -384,14 +410,17 @@ function renderAll(){
     document.getElementById('sec-'+tabs[i]).hidden=TAB!==tabs[i]
   }
   document.getElementById('pendingbar').innerHTML=p.length>=2
-    ?'<button class="no" onclick="denyAll('+p.length+')">Deny all '+p.length+' pending</button>':''
+    ?'<button class="no" data-act="denyall" data-n="'+p.length+'">Deny all '+p.length+' pending</button>':''
   document.getElementById('pending').innerHTML=p.length?p.map(card).join(''):'<div class="empty">nothing waiting on you</div>'
   document.getElementById('history').innerHTML=r.length?r.map(card).join(''):'<div class="empty">no resolved requests yet</div>'
   document.getElementById('policies').innerHTML=POLICIES.length?POLICIES.map(policyCard).join(''):'<div class="empty">no policies installed</div>'
   document.getElementById('wrapcb').checked=document.body.classList.contains('wrap')
+  for(var k in saved){var inp=document.getElementById(k);if(inp)inp.value=saved[k]}
+  if(focused){var fe=document.getElementById(focused)
+    if(fe){fe.focus();fe.setSelectionRange(fe.value.length,fe.value.length)}}
   focusReq()
 }
-// The agent-shared link is __BASE_URL__/?req=REQ-N — highlight that request (in whichever
+// The agent-shared link is <ui base>/?req=REQ-N — highlight that request (in whichever
 // tab it lives; showQueue picks the tab on first load).
 var focusedOnce=false
 function focusReq(){
