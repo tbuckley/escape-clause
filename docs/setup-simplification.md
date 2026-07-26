@@ -15,8 +15,7 @@ in the protected store** (`~/.escape-clause/configs/<name>.json`), fed by an
 longer term — verified by a **SessionStart hook** so that plain `claude` becomes a
 legitimate way to start a session and the launcher becomes optional sugar. It also
 covers a pluggable **exposure provider** interface (tailscale and its successors as
-one narrow contract) and an **upgrade path** — `escape-clause update` plus a
-shim/daemon split — that applies new broker code without restarting running sessions.
+one narrow contract).
 
 ## What setup costs today
 
@@ -221,7 +220,6 @@ subsequent command is the same short word regardless of where it lives:
 escape-clause init <dir>         # wizard on a TTY; flags for scripts
 escape-clause doctor [dir]       # explain what's wrong, if anything
 escape-clause launch [dir]       # verify + print + exec claude (unchanged contract)
-escape-clause update             # pull + reinstall + restart the broker (see Upgrades)
 ```
 
 ### 6. Toward not needing the launcher (follow-up, separate issue)
@@ -380,85 +378,6 @@ whose whole job is naming the drifted setting and printing the fix.
 | Add a channel | install plugin, 2 exports, re-init, exports forever | `init --reconfigure`, answer one question |
 | Remote approvals | know about tailscale, serve, export URL, re-init | pick a provider in the wizard: your URL, tailscale, or your own script |
 | Drift refusal | "not what init would write" — go figure out why | `doctor` names the setting and prints the fix |
-| Upgrade | pull, reinstall, restart every session | `escape-clause update` — sessions stay up |
-
-## Upgrades: new code without a new session
-
-Today an upgrade is: pull the clone, re-run `install`, then restart **every running
-session** — because the broker is a stdio child of the `claude` process, and it is one
-process wearing four hats (MCP server, channel, approval UI, egress proxies). Kill it
-and the session loses its broker; keep the session and the old code keeps running.
-
-### `escape-clause update`
-
-`install` records the clone path in the store; `update` then pulls it, shows what
-changed (`git log --oneline old..new`), re-runs the install copy + `npm install`, and
-offers to restart the broker:
-
-```console
-$ escape-clause update
-fetching tbuckley/escape-clause… 12 new commits
-  a1b2c3d Add exposure providers
-  d4e5f6a doctor: check channel plugins
-  …
-staged to ~/.escape-clause/app
-restart the broker to apply? [Y/n] y
-daemon restarted — 2 sessions reconnected, 0 pending tickets lost
-```
-
-Deliberately **not** auto-update: this code runs with host privileges, so fetching it
-is an explicit human command that shows you the diff summary before anything restarts.
-
-### The restart problem, honestly
-
-Can the broker restart under a live session *today*? Partially, and fragilely. The
-durable half is already solved — tickets, the counter, policies, and the audit log
-live on disk, and the deny-all proxies fail closed even while their listeners are down
-(`proxy.mjs` documents this). But the process itself belongs to the session: only the
-session can respawn its stdio child. `/mcp` reconnect plausibly covers the MCP-server
-hat with fresh code; whether the *channel* hat (the outcome-push path) re-establishes
-on reconnect is unverified preview behavior. Not a foundation to build a button on.
-
-### Structural fix: split the shim from the daemon
-
-```
-claude ──stdio── broker-shim.mjs ──unix socket── escape-clause daemon
-                 (per session,     (~/.escape-clause/     ├─ approval UI :8790
-                  a few dozen        run/broker.sock)     ├─ deny-all proxies :8791/2
-                  boring lines)                           ├─ tickets · policies · reviewer
-                                                          └─ exposure provider child
-```
-
-- **The daemon owns everything upgradeable.** Restarting it is exec-ing its new self;
-  state is already on disk. During the blip, the shim retries the socket for a few
-  seconds, so an in-flight MCP call looks like a slow tool call — the session never
-  notices, and channels don't need to re-handshake with claude because the shim's
-  stdio connection never dropped.
-- **The shim is the only code pinned to session lifetime**, and it's deliberately too
-  boring to change: forward bytes, retry the socket. On the rare release that does
-  touch it, the release notes say "session restart required" — the exception, not the
-  rule.
-- Bonus: multiple workspaces share one daemon cleanly. Today a second concurrent
-  session spawns a second broker that loses the port bind; under the split, every
-  shim dials the same socket.
-
-### The UI button
-
-With the split, the button the issue asks for is small and safe: a Settings view in
-the authenticated UI shows *installed* vs *staged* version, and **Restart broker**
-tells the daemon to exec itself. What the button deliberately does **not** do is fetch:
-downloading and executing new code from a web-reachable button is a bigger attack
-surface than a loopback tool needs, especially once the UI is on a tailnet. Fetching
-stays on the CLI (`update` stages it); the button — or `update`'s own prompt — applies
-what's staged.
-
-### Agent-triggered updates: no
-
-No dedicated permission, tool, or ticket class for the agent to update the broker.
-An agent-influenced upgrade of host-privileged code is precisely the channel this
-project exists to close. The agent can always *say* "a newer broker fixes this" in a
-ticket justification — quarantined as an untrusted claim like everything else it says —
-and a human runs `update`.
 
 ## Alternatives considered
 
@@ -512,8 +431,5 @@ need appears.
 3. **`doctor`**, and `launch`'s drift error points at it; custom `script:` exposure
    providers.
 4. **Session-start verification hook**, channel-flag upstreaming — separate proposal.
-5. **Upgrades**: `escape-clause update`, the shim/daemon split, and the UI restart
-   button. The split is the largest single change in this document and can land
-   before or after phase 4 — they're independent.
 
 Each phase lands independently and keeps the current commands working.
