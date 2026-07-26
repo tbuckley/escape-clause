@@ -132,7 +132,9 @@ stamp() {
   check_paths "${ESCAPE_CLAUSE_DENY_WRITE:-}" ESCAPE_CLAUSE_DENY_WRITE
   check_paths "${ESCAPE_CLAUSE_ALLOW_READ:-}" ESCAPE_CLAUSE_ALLOW_READ
   check_allow_read
-  mkdir -p "$TGT/.claude"
+  # skills is pre-created so the agent can drop files straight in — it's the one
+  # subdirectory of .claude open to the agent (guard carve-out + sandbox allowWrite)
+  mkdir -p "$TGT/.claude/skills"
   # Chat channels are opt-in: if you connect one (ESCAPE_CLAUSE_CHANNELS at launch), its
   # reply tool must be pre-allowed here or it hits the permission prompt (auto-denied when
   # ESCAPE_CLAUSE_RELAY=deny, the stamped default). ESCAPE_CLAUSE_CHANNEL_TOOLS is a
@@ -159,6 +161,11 @@ stamp() {
   DENY_READ="$DENY_READ$(json_items "${ESCAPE_CLAUSE_DENY_READ:-}")"
   DENY_WRITE='"./.claude", "./.mcp.json", "~/.escape-clause"'
   DENY_WRITE="$DENY_WRITE$(json_items "${ESCAPE_CLAUSE_DENY_WRITE:-}")"
+  # .claude stays denyWrite as a whole; skills are carved back in (the more specific path
+  # wins, same as allowRead inside denyRead). Mirrors the guard's file-tool carve-out:
+  # skills execute through sandboxed bash under the same rules, so writing them grants
+  # nothing the writable workspace doesn't already. settings/policy files stay denied.
+  ALLOW_WRITE='"./.claude/skills"'
   EXTRA_ALLOW="$(json_items "${ESCAPE_CLAUSE_ALLOW_READ:-}")"
   if [ -n "$ALLOW_READ" ]; then ALLOW_READ="$ALLOW_READ$EXTRA_ALLOW"; else ALLOW_READ="${EXTRA_ALLOW#, }"; fi
   # Sandbox on, egress routed to the deny-all proxy, escape hatch closed, crown jewels +
@@ -195,7 +202,8 @@ stamp() {
     "filesystem": {
       "denyRead": [$DENY_READ],
       "allowRead": [$ALLOW_READ],
-      "denyWrite": [$DENY_WRITE]
+      "denyWrite": [$DENY_WRITE],
+      "allowWrite": [$ALLOW_WRITE]
     }
   }
 }

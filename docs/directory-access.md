@@ -42,6 +42,15 @@ history), and the workspace's `.claude/` + `.mcp.json` (the config that launches
 next session). Bash-side these are `denyRead` entries; file-tool-side they're the
 guard's hardcoded floor.
 
+One carve-out inside that last entry: **`.claude/skills/` is open** — the agent can
+create and edit skills there (guard exception for file tools, sandbox `allowWrite` for
+bash). A skill is prompt content plus scripts that still execute through sandboxed bash
+under the same rules, so writing one grants nothing the writable workspace doesn't
+already; the launch config next to it (`settings.json`, `settings.local.json`,
+`escape-clause-policy.json`) stays fully denied, and the carve-out never follows a
+symlink out — a `.claude/skills` link resolves to its target and is judged as the
+target.
+
 **Write deny — file tools** ("persistence vectors"): paths where a single write means
 *your account runs attacker-chosen code outside the sandbox later*. Sandboxed bash
 already can't write them; the guard closes the unsandboxed file-tool door:

@@ -70,8 +70,22 @@ const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd || ''
 const FLOOR_FULL = ['.ssh', '.aws', '.gnupg', '.config/gcloud', '.escape-clause',
   '.claude.json', '.claude.json.backup', '.claude/.credentials.json']
   .map((p) => join(HOME, p))
-  .concat(projectDir ? [join(projectDir, '.claude'), join(projectDir, '.mcp.json')] : [])
+  .concat(projectDir ? [join(projectDir, '.mcp.json')] : [])
   .map(realish)
+
+// The workspace's .claude/ keeps the same full deny as the floor, with ONE exception:
+// .claude/skills. A skill is prompt content plus scripts that still execute through
+// sandboxed bash under this guard, so writing one grants nothing the writable workspace
+// doesn't already grant — unlike settings.json (drops the sandbox/hook on next launch)
+// or escape-clause-policy.json (this guard's own deny list), which stay denied.
+// The exception is the LEXICAL skills path under the RESOLVED .claude root, and it only
+// ever narrows the .claude deny — it is not an allow rule: the crown-jewel floor is
+// checked first, and every later rule (policy denyRead/denyWrite, profile fences) still
+// applies. denyReason realish()es each candidate path, so a `.claude/skills` symlink
+// cannot launder the exception elsewhere: the path resolves to its target and is judged
+// as the target, never as skills.
+const PROJECT_CLAUDE = projectDir ? realish(join(projectDir, '.claude')) : ''
+const PROJECT_SKILLS = PROJECT_CLAUDE ? join(PROJECT_CLAUDE, 'skills') : ''
 
 // Host persistence vectors — a write here means the user's own account runs
 // attacker-chosen code OUTSIDE the sandbox later: next boot/login (launchd, autostart,
@@ -126,6 +140,8 @@ function denyReason(raw) {
   const p = realish(raw)
   if (!p) return null
   if (under(p, FLOOR_FULL)) return `Protected path (${raw}) — not accessible to file tools.`
+  if (PROJECT_CLAUDE && under(p, [PROJECT_CLAUDE]) && !under(p, [PROJECT_SKILLS]))
+    return `Workspace launch config (${raw}) — .claude is not accessible to file tools, except .claude/skills.`
   if (isWrite && under(p, FLOOR_WRITE)) return `Host persistence vector (${raw}) — file tools may not write to login/startup/PATH/git/Claude config.`
   if (under(p, DENY_READ)) return `Deny-read path (${raw}) — blocked by this workspace's policy.`
   if (isWrite && under(p, DENY_WRITE)) return `Deny-write path (${raw}) — blocked by this workspace's policy.`
