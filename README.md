@@ -35,15 +35,22 @@ You need [Claude Code](https://code.claude.com) signed in and Node.js **20+** wi
 Optionally set `ANTHROPIC_API_KEY` for AI risk summaries on tickets (without it you
 review from the raw facts).
 
-**1. Install the broker.** It lands in `~/.escape-clause/app` — deliberately outside the
-agent's reach — prints the approval-UI password, and offers to put `escape-clause` on
-your PATH (a symlink in `~/.local/bin`, so every later command is one short word):
+**1. Install the broker.** Get the CLI from npm (versioned, provenance-signed
+releases), then `install` copies the broker into `~/.escape-clause/app` — deliberately
+outside the agent's reach — and prints the approval-UI password:
 
 ```bash
-git clone https://github.com/tbuckley/escape-clause.git
-cd escape-clause
-./escape-clause.sh install
+npm install -g escape-clause
+escape-clause install
 ```
+
+Updating stays a deliberate step: `escape-clause update` fetches the latest release and
+re-runs `install`. Nothing self-updates in the background — `launch` refuses to run a
+broker whose version has drifted from the CLI's until you re-install.
+
+(From source instead: `git clone https://github.com/tbuckley/escape-clause.git`, then
+`./escape-clause.sh install` from the clone — the same `install`, and it offers to
+symlink `escape-clause` into `~/.local/bin` since there's no npm shim on your PATH.)
 
 **2. Initialize a workspace** — any directory that doesn't contain the broker source.
 On a terminal this walks you through the choices question-by-question (how much of your
@@ -129,8 +136,12 @@ change sandbox behavior). The audit spawns probe agents that actively try to esc
 it takes a few minutes and consumes tokens:
 
 ```bash
-cd tests && npm install && node sandbox-audit.mjs
+git clone https://github.com/tbuckley/escape-clause.git
+cd escape-clause/tests && npm install && node sandbox-audit.mjs
 ```
+
+(The audit runs from a clone — it writes scratch workspaces next to itself, which
+doesn't belong inside npm's global tree.)
 
 If you use the fakechat channel and your first chat message ever vanishes after a
 relaunch, an orphaned fakechat is holding port 8787 — `lsof -ti :8787 | xargs kill`
@@ -162,8 +173,9 @@ before launching. Details in [Troubleshooting](#troubleshooting).
   the proxies die with it. If you use the fakechat channel and an orphan lingers on
   8787: `lsof -ti :8787 | xargs kill`.
 - **Uninstall**: `rm -rf ~/.escape-clause` removes the broker and all its state
-  (tickets, policies, password, `audit.log`). A workspace stays a normal directory —
-  delete its stamped `.claude/`, `.mcp.json`, and `CLAUDE.md` if you want it pristine.
+  (tickets, policies, password, `audit.log`); `npm uninstall -g escape-clause` removes
+  the CLI. A workspace stays a normal directory — delete its stamped `.claude/`,
+  `.mcp.json`, and `CLAUDE.md` if you want it pristine.
 
 ## Troubleshooting
 
@@ -212,7 +224,7 @@ re-run `escape-clause init <workspace>` to re-stamp from the config.
 | `guard.mjs` | Fail-closed `PreToolUse` hook denying file tools on protected paths + the stamped directory policy |
 | `setup.mjs` | Per-workspace config files (`~/.escape-clause/configs/`), the init wizard, stamping, drift verification |
 | `expose.mjs` | Exposure providers: gets the loopback-only UI a reachable URL (tailscale built-in, or your script) |
-| `escape-clause.sh` | `install` / `init` / `launch` |
+| `escape-clause.sh` | `install` / `update` / `init` / `launch` |
 | `templates/CLAUDE.md` | Rules-of-the-box instructions stamped into new workspaces |
 | `docs/` | Architecture, security model, design docs and proposals |
 | `tests/` | The adversarial sandbox audit |
@@ -233,6 +245,8 @@ re-run `escape-clause init <workspace>` to re-stamp from the config.
   directories on both enforcement layers, the persistence-vector write floor
   (LaunchAgents, shell rc files, autostart, …), and the honest limits.
 - **[tests/README.md](tests/README.md)** — what the adversarial audit actually probes.
+- **[docs/RELEASING.md](docs/RELEASING.md)** — how versions and npm releases are cut
+  (changesets, trusted publishing, provenance).
 - **[docs/securing-agent.md](docs/securing-agent.md)** — the motivating essay: why
   containment plus a brokered escape hatch, rather than trust.
 - **[docs/PROPOSAL.md](docs/PROPOSAL.md)** and

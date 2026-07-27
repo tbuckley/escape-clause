@@ -1,9 +1,51 @@
 {
+  "name": "escape-clause",
+  "version": "0.1.0",
+  "description": "Run Claude Code in a locked-down sandbox — and give it a safe, human-approved way back out.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tbuckley/escape-clause.git"
+  },
+  "homepage": "https://github.com/tbuckley/escape-clause#readme",
+  "bugs": {
+    "url": "https://github.com/tbuckley/escape-clause/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "sandbox",
+    "agent",
+    "security",
+    "human-in-the-loop",
+    "mcp"
+  ],
+  "bin": {
+    "escape-clause": "./escape-clause.sh"
+  },
+  "files": [
+    "broker.mjs",
+    "server.mjs",
+    "store.mjs",
+    "policies.mjs",
+    "proxy.mjs",
+    "reviewer.mjs",
+    "guard.mjs",
+    "expose.mjs",
+    "setup.mjs",
+    "ui.html",
+    "escape-clause.sh",
+    "templates/",
+    "docs/",
+    "tests/"
+  ],
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^3.23.0 || ^4.0.0"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.27.0"
   }
 }

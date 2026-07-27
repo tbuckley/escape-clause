@@ -1,0 +1,48 @@
+# Release automation: changesets + npm trusted publishing (OIDC, provenance).
+#
+# On every push to main, changesets/action either (a) opens/updates the standing
+# "Version Packages" PR from pending .changeset/*.md files, or — when that PR is
+# merged — (b) publishes to npm, tags, and creates the GitHub Release.
+#
+# There is NO npm token anywhere in this repo: publishing authenticates via the
+# job's OIDC token against the Trusted Publisher configured on npmjs.com for
+# this repo + this workflow file (see docs/RELEASING.md for the one-time setup).
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency: release
+
+permissions: {}
+
+jobs:
+  release:
+    name: Version or publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # push the version commit + tag, create the GitHub Release
+      pull-requests: write   # open/update the "Version Packages" PR
+      id-token: write        # OIDC → npm trusted publishing + provenance
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing (automatic OIDC credential exchange) needs npm >= 11.5.1;
+      # don't rely on whatever the runner's node bundles.
+      - run: npm install -g npm@latest
+
+      - run: npm ci
+
+      - name: Create release PR or publish to npm
+        uses: changesets/action@v1
+        with:
+          publish: npx changeset publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'
