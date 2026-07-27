@@ -140,7 +140,8 @@ before launching. Details in [Troubleshooting](#troubleshooting).
   opt-in `strict`/`paranoid` profiles that hide your whole home directory
   ([docs/directory-access.md](docs/directory-access.md)).
 - **A broker (MCP server)** the agent uses to *request* outside actions — non-blocking
-  tickets it can create and read but, by construction, never resolve.
+  tickets it can create, read, and withdraw (rejection-only cleanup of its own pending
+  requests) but, by construction, never approve.
 - **An approval web UI** — password login, live queue: the exact command or URL, an AI
   risk summary, and the agent's justification, quarantined as an untrusted claim.
 - **A policy engine** — named, hash-pinned scripts with per-class auto-approval:

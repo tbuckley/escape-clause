@@ -8,7 +8,9 @@
 //   - policy engine: named scripts pinned by hash in the private store; readonly and
 //     private-write classes auto-run, everything else files a ticket (policies.mjs)
 //   - approval web UI on http://127.0.0.1:8790 with AI risk summaries (server.mjs,
-//     reviewer.mjs) — the ONLY place tickets get resolved; MCP can't resolve by design
+//     reviewer.mjs) — the ONLY place tickets get APPROVED; the MCP surface can withdraw
+//     its own pending tickets (cancel_request — rejection-only, nothing ever executes)
+//     but has no approve path by design
 //   - deny-all egress proxies on 127.0.0.1:8791 (HTTP) + 8792 (SOCKS5, for git-ssh/ftp/
 //     grpc/rsync) (proxy.mjs) — settings.json points the sandbox at them
 //     (sandbox.network.httpProxyPort/socksProxyPort), so off-allowlist network fails
@@ -21,10 +23,10 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { execFile } from 'node:child_process'
-import { appendFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { appendFileSync, writeFileSync, realpathSync } from 'node:fs'
+import { join, isAbsolute, relative } from 'node:path'
 import { z } from 'zod'
-import { DIR, audit, nextTicketId, saveTicket, getTicket } from './store.mjs'
+import { DIR, audit, nextTicketId, saveTicket, getTicket, listTickets } from './store.mjs'
 import { CLASSES, AUTO_CLASSES, NAME_RE, getPolicy, listPolicies, policyScript, installPolicy, runPolicy, seedPolicies } from './policies.mjs'
 import { review } from './reviewer.mjs'
 import { startServer } from './server.mjs'
@@ -55,6 +57,49 @@ const RELAY = ['forward', 'deny', 'off'].includes((process.env.ESCAPE_CLAUSE_REL
 
 seedPolicies()
 
+// ---------- execution defaults ----------
+// Every run (auto or approved) executes with cwd = WORKSPACE (the directory the broker
+// was launched from, i.e. the agent workspace) and a 15s timeout unless the request
+// overrides them. Overrides are snapshotted into the ticket, so the human approves the
+// exact cwd/timeout alongside the exact argv.
+const WORKSPACE = process.cwd()
+const DEFAULT_TIMEOUT_MS = 15000
+const MAX_TIMEOUT_MS = 600000 // 10 min hard cap — a run can't wedge the broker forever
+
+// Validate agent-supplied overrides. Deliberately NO existence check on cwd here: a
+// request-time "no such directory" error would be a free oracle for probing which host
+// paths exist outside the sandbox; a bad cwd just fails at execution instead.
+function parseExecOpts(a) {
+  const o = {}
+  if (a.cwd !== undefined) {
+    if (typeof a.cwd !== 'string' || !isAbsolute(a.cwd)) return { error: 'cwd must be an absolute path string' }
+    o.cwd = a.cwd
+  }
+  if (a.timeout_ms !== undefined) {
+    const t = Number(a.timeout_ms)
+    if (!Number.isInteger(t) || t < 1000 || t > MAX_TIMEOUT_MS) return { error: `timeout_ms must be an integer between 1000 and ${MAX_TIMEOUT_MS}` }
+    o.timeout_ms = t
+  }
+  return { opts: o }
+}
+
+// Resolve an agent-supplied cwd and return its REAL path only if it lands inside the
+// workspace subtree; null = outside or unresolvable -> human review (no error back to
+// the agent, so no existence oracle). Auto-runs must execute with the RETURNED path,
+// never the raw request string — the raw string would be re-resolved by the kernel at
+// spawn time, so a symlink whose target is swapped after this check would move the run
+// elsewhere. Residual race: swapping a real directory component of the resolved path
+// itself between check and spawn (a same-tick window of pure JS) — every attempt costs
+// an audit-logged MCP call, and the payoff is bounded to an approved auto-class script
+// running with a different cwd.
+function resolveWorkspaceCwd(cwd) {
+  try {
+    const real = realpathSync(cwd)
+    const rel = relative(realpathSync(WORKSPACE), real)
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel)) ? real : null
+  } catch { return null }
+}
+
 const experimental = { 'claude/channel': {} } // channel spec -> lets the broker PUSH notifications
 if (RELAY !== 'off') experimental['claude/channel/permission'] = {} // permission relay (see RELAY above)
 
@@ -76,6 +121,10 @@ const mcp = new Server(
       'The outcome arrives later as a channel message: <channel source="broker" ticket="REQ-N" verdict="approved|rejected">. ' +
       'On "approved" the output is in that message — relay it to whoever asked. ' +
       'register_policy() proposes a new/updated policy script (itself human-reviewed). ' +
+      'cancel_request({ticket|tickets|all}) withdraws your own pending tickets with no human involved — rejection only, ' +
+      'nothing executes; use it to clean up stale or superseded requests. ' +
+      'Runs default to cwd = the launch workspace and a 15s timeout; request_action takes optional cwd/timeout_ms overrides ' +
+      '(a cwd outside the workspace always needs human review, even for auto-approved classes). ' +
       'A pending ticket is not a failure: continue other work; do not poll. Never try to bypass the sandbox; use the broker.',
   },
 )
@@ -85,16 +134,37 @@ const TOOLS = [
     name: 'request_action',
     description: 'Act OUTSIDE the sandbox. Give EITHER {policy, args} to run a named policy (auto-approved classes ' +
       'execute immediately and return output; others file a human-review ticket) OR {command} as a raw argv array ' +
-      '(always human-reviewed). NON-BLOCKING when a ticket is filed: the outcome arrives later as a broker channel message.',
+      '(always human-reviewed). NON-BLOCKING when a ticket is filed: the outcome arrives later as a broker channel message. ' +
+      'Execution defaults: cwd = the workspace the broker was launched from, timeout = 15s; override with cwd/timeout_ms.',
     inputSchema: {
       type: 'object',
       properties: {
         policy: { type: 'string', description: 'name of a registered policy (see list_policies)' },
         args: { type: 'array', items: { type: 'string' }, description: 'args for the policy script' },
         command: { type: 'array', items: { type: 'string' }, description: 'raw argv, e.g. ["echo","hello"] — always human-reviewed' },
+        cwd: { type: 'string', description: 'absolute working directory for the run (default: the launch workspace). ' +
+          'A cwd outside the workspace always files a human-review ticket, even for auto-approved policy classes.' },
+        timeout_ms: { type: 'integer', description: 'kill the run after this many ms, 1000–600000 (default: 15000)' },
         reason: { type: 'string', description: 'why you need this, shown to the human reviewer' },
       },
       required: ['reason'],
+    },
+  },
+  {
+    name: 'cancel_request',
+    description: 'Withdraw your own pending tickets — no human involved, and strictly rejection-only: nothing can ever ' +
+      'execute through this tool. Use it to clean up requests that are stale, superseded, or filed by mistake. Give ' +
+      '{ticket: "REQ-N"}, {tickets: [...]}, or {all: true} (= every pending broker ticket of yours). Only tickets filed ' +
+      'from this session\'s workspace are reachable; relayed permission prompts (PERM-*) are not cancellable — only the ' +
+      'human answers those. Cancelled tickets stay in the audit trail and UI history.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ticket: { type: 'string', description: 'a single ticket id, e.g. REQ-12' },
+        tickets: { type: 'array', items: { type: 'string' }, description: 'several ticket ids' },
+        all: { type: 'boolean', description: 'true = cancel every pending broker ticket' },
+        reason: { type: 'string', description: 'optional note recorded in the audit log and shown in the UI history' },
+      },
     },
   },
   {
@@ -154,22 +224,44 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     case 'request_action': {
       if (a.policy && a.command) return fail('give policy OR command, not both')
+      const { error, opts } = parseExecOpts(a)
+      if (error) return fail(error)
       if (a.policy) {
         const p = getPolicy(a.policy)
         if (!p) return fail(`unknown policy: ${a.policy} (see list_policies)`)
         const args = (a.args || []).map(String)
-        if (AUTO_CLASSES.has(p.class)) {
-          const r = await runPolicy(p.name, args)
-          audit('auto_approved_run', { policy: p.name, class: p.class, args, exitCode: r.exitCode })
+        // Auto-run keeps its class ONLY inside the workspace: an agent-chosen cwd
+        // elsewhere (protected dirs, other repos, nonexistent probes) demotes to a ticket.
+        const autoCwd = opts.cwd ? resolveWorkspaceCwd(opts.cwd) : undefined
+        if (AUTO_CLASSES.has(p.class) && (!opts.cwd || autoCwd)) {
+          const r = await runPolicy(p.name, args, { cwd: autoCwd, timeout: opts.timeout_ms })
+          audit('auto_approved_run', { policy: p.name, class: p.class, args, exitCode: r.exitCode, ...opts })
           log(`AUTO-RUN ${p.name} ${JSON.stringify(args)} -> exit=${r.exitCode}`)
           return json({ status: 'executed', policy: p.name, class: p.class, exitCode: r.exitCode, ...capOutput(r, p.name) })
         }
-        return json(createTicket({ kind: 'policy', policy: p.name, policyClass: p.class, args, reason: String(a.reason || '') }))
+        const ticket = createTicket({ kind: 'policy', policy: p.name, policyClass: p.class, args, ...opts, reason: String(a.reason || '') })
+        if (AUTO_CLASSES.has(p.class)) ticket.note = 'This class normally auto-runs, but a cwd outside the workspace always needs human review. ' + ticket.note
+        return json(ticket)
       }
       if (Array.isArray(a.command) && a.command.length && a.command.every((x) => typeof x === 'string')) {
-        return json(createTicket({ kind: 'command', command: a.command, reason: String(a.reason || '') }))
+        return json(createTicket({ kind: 'command', command: a.command, ...opts, reason: String(a.reason || '') }))
       }
       return fail('need {policy, args?} or {command: ["argv0", ...]}')
+    }
+
+    case 'cancel_request': {
+      const reason = String(a.reason || '')
+      let ids
+      if (a.all === true) ids = listTickets().filter((t) => t.status === 'pending' && t.kind !== 'permission' && t.workspace === WORKSPACE).map((t) => t.ticket)
+      else if (Array.isArray(a.tickets) && a.tickets.length) ids = a.tickets.map(String)
+      else if (typeof a.ticket === 'string') ids = [a.ticket]
+      else return fail('give {ticket: "REQ-N"}, {tickets: [...]}, or {all: true}')
+      const results = ids.map((id) => cancelTicket(id, reason))
+      if (results.some((r) => r.ok)) ui.broadcast()
+      return json({
+        cancelled: results.filter((r) => r.ok).map((r) => r.ticket),
+        errors: results.filter((r) => r.error).map((r) => ({ ticket: r.ticket, error: r.error })),
+      })
     }
 
     case 'register_policy': {
@@ -192,7 +284,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
 // ---------- tickets ----------
 function createTicket(fields) {
-  const t = { ticket: nextTicketId(), status: 'pending', created: new Date().toISOString(), ...fields }
+  // workspace = ownership: several sessions may share one store (server.mjs), and
+  // cancel_request must only reach tickets filed from this broker's own workspace.
+  const t = { ticket: nextTicketId(), status: 'pending', created: new Date().toISOString(), workspace: WORKSPACE, ...fields }
   saveTicket(t)
   audit('ticket_created', { ticket: t.ticket, kind: t.kind })
   log(`PENDING ${t.ticket} (${t.kind}) — review at http://127.0.0.1:${PORT}`)
@@ -218,7 +312,29 @@ function kickReviewer(t) {
   }).catch(() => {})
 }
 
-// The single resolution path, called only by the web UI's authenticated endpoints.
+// Agent-initiated withdrawal — the ONE ticket-state transition the MCP surface may
+// perform. Safe because it only ever prevents execution: a cancelled ticket can never
+// be approved afterwards (resolveTicket refuses non-pending), and approval itself stays
+// exclusive to the web UI. Relayed permission prompts are excluded — those belong to
+// Claude Code's own dialog and only the human (or relay=deny) answers them.
+function cancelTicket(id, reason) {
+  const t = getTicket(id)
+  // Nonexistent and not-yours collapse to ONE answer: with a shared store, a
+  // distinguishable reply would let one session probe another's ticket ids.
+  if (!t || t.workspace !== WORKSPACE) return { ticket: id, error: 'unknown ticket' }
+  if (t.kind === 'permission') return { ticket: id, error: 'permission prompts cannot be cancelled via MCP' }
+  if (t.status !== 'pending') return { ticket: id, error: `already ${t.status}` }
+  t.status = 'cancelled'
+  t.resolved = new Date().toISOString()
+  t.cancelledBy = 'agent'
+  if (reason) t.note = reason
+  saveTicket(t)
+  audit('cancelled_by_agent', { ticket: id, note: reason })
+  log(`CANCELLED ${id} (by agent)${reason ? ` — ${reason}` : ''}`)
+  return { ticket: id, ok: true }
+}
+
+// The single APPROVAL path, called only by the web UI's authenticated endpoints.
 async function resolveTicket(id, verdict, message) {
   const t = getTicket(id)
   if (!t) return { error: `unknown ticket: ${id}` }
@@ -251,14 +367,20 @@ async function resolveTicket(id, verdict, message) {
     return { ok: true }
   }
 
-  // Approved: execute exactly the snapshot in the ticket file.
+  // Persist 'approved' BEFORE executing: a cancel_request racing in mid-run then reads
+  // a non-pending status and refuses, instead of stamping 'cancelled' over the record
+  // of something that really did execute. (Output is persisted by the save below.)
+  saveTicket(t)
+
+  // Approved: execute exactly the snapshot in the ticket file (incl. cwd/timeout_ms —
+  // the reviewer saw those alongside the argv).
   let body
   if (t.kind === 'command') {
-    const r = await runOnHost(t.command)
+    const r = await runOnHost(t.command, { cwd: t.cwd, timeout_ms: t.timeout_ms })
     t.output = fmtRun(r)
     body = `Output:\n${capOutput(r, id).output}`
   } else if (t.kind === 'policy') {
-    const r = await runPolicy(t.policy, t.args || [])
+    const r = await runPolicy(t.policy, t.args || [], { cwd: t.cwd, timeout: t.timeout_ms })
     t.output = fmtRun(r)
     body = `Policy ${t.policy} ran. Output:\n${capOutput(r, id).output}`
   } else if (t.kind === 'policy-registration') {
@@ -275,8 +397,8 @@ async function resolveTicket(id, verdict, message) {
   return { ok: true }
 }
 
-const runOnHost = (argv) => new Promise((res) =>
-  execFile(argv[0], argv.slice(1), { timeout: 15000 }, (e, out, err) =>
+const runOnHost = (argv, { cwd, timeout_ms } = {}) => new Promise((res) =>
+  execFile(argv[0], argv.slice(1), { cwd, timeout: timeout_ms || DEFAULT_TIMEOUT_MS }, (e, out, err) =>
     res({ exitCode: e ? (typeof e.code === 'number' ? e.code : 1) : 0, stdout: String(out), stderr: String(err || e?.message || '') })))
 
 const fmtRun = (r) => `exit=${r.exitCode}\nstdout: ${r.stdout.trim() || '(none)'}${r.stderr.trim() ? `\nstderr: ${r.stderr.trim()}` : ''}`
@@ -333,6 +455,7 @@ mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
     kind: 'permission',
     status: 'pending',
     created: new Date().toISOString(),
+    workspace: WORKSPACE,
     tool_name: params.tool_name,
     description: params.description,
     input_preview: params.input_preview,

@@ -431,6 +431,31 @@ async function brokerChecks() {
       pass: noAuth.status === 401 && g2after?.status === 'pending',
       detail: `http=${noAuth.status}, ticket=${g2after?.status}` })
 
+    // E4: cancel_request is the ONE agent-callable state transition, and it only goes
+    // the safe direction — after the agent withdraws its ticket, even a logged-in
+    // approve must refuse, and nothing may have run.
+    const e4 = await b.call('cancel_request', { ticket: g2.ticket, reason: 'audit probe cleanup' })
+    const e4approve = await resolve(g2.ticket, 'approve', session)
+    const e4after = (await (await authed(api)).json()).find((t) => t.ticket === g2.ticket)
+    E.push({ name: 'cancel_request is rejection-only (cancelled ≠ approvable)', sev: 'critical',
+      pass: (e4.cancelled || []).includes(g2.ticket) && e4approve.status === 409 && e4after?.status === 'cancelled' && !e4after?.output,
+      detail: `cancelled=${JSON.stringify(e4.cancelled)}, approve-after -> http=${e4approve.status}, stored=${e4after?.status}, output=${e4after?.output ? 'PRESENT (RAN AFTER CANCEL!)' : 'none'}` })
+
+    // G3: an agent-chosen cwd outside the workspace revokes auto-run — the readonly
+    // seed policy must file a ticket instead of executing (and a bogus path must not
+    // error differently, which would be an existence oracle for host directories).
+    const g3 = await b.call('request_action', { policy: 'host-info', args: [], cwd: tmpdir(), reason: 'audit probe' })
+    const g3b = await b.call('request_action', { policy: 'host-info', args: [], cwd: '/nonexistent-audit-probe', reason: 'audit probe' })
+    G.push({ name: 'out-of-workspace cwd demotes auto-run to a ticket', sev: 'critical',
+      pass: g3.status === 'pending' && g3b.status === 'pending',
+      detail: `cwd=${tmpdir()} -> ${g3.status}; cwd=/nonexistent -> ${g3b.status}` })
+    await b.call('cancel_request', { tickets: [g3.ticket, g3b.ticket].filter(Boolean), reason: 'audit cleanup' })
+
+    // G4: an in-workspace cwd keeps the class's auto-run.
+    const g4 = await b.call('request_action', { policy: 'host-info', args: [], cwd: ws, timeout_ms: 30000, reason: 'audit probe' })
+    G.push({ name: 'in-workspace cwd keeps auto-run', sev: 'hardening',
+      pass: g4.status === 'executed' && g4.exitCode === 0, detail: `status=${g4.status}, exit=${g4.exitCode}` })
+
     // F: hash pinning. Register V1, approve it, then try to change what runs WITHOUT
     // approval — via an unapproved re-registration AND a tampered workspace copy — and
     // prove the approved bytes still run.

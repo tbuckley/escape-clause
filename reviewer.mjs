@@ -16,6 +16,8 @@ function verifiedFacts(t) {
   if (t.command) f.command_argv = t.command
   if (t.policy) { f.policy = t.policy; f.policy_class = t.policyClass; f.args = t.args || [] }
   if (t.registration) f.policy_registration = t.registration // {name, class, description, script, previousScript?}
+  if (t.cwd) f.cwd = t.cwd // agent-chosen working directory (default is the workspace)
+  if (t.timeout_ms) f.timeout_ms = t.timeout_ms
   if (t.kind === 'permission') { f.relayed_tool = t.tool_name; f.description = t.description; f.input_preview = t.input_preview }
   return f
 }
