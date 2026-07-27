@@ -36,7 +36,8 @@ Optionally set `ANTHROPIC_API_KEY` for AI risk summaries on tickets (without it 
 review from the raw facts).
 
 **1. Install the broker.** It lands in `~/.escape-clause/app` — deliberately outside the
-agent's reach — and prints the approval-UI password:
+agent's reach — prints the approval-UI password, and offers to put `escape-clause` on
+your PATH (a symlink in `~/.local/bin`, so every later command is one short word):
 
 ```bash
 git clone https://github.com/tbuckley/escape-clause.git
@@ -45,29 +46,37 @@ cd escape-clause
 ```
 
 **2. Initialize a workspace** — any directory that doesn't contain the broker source.
-This stamps the sandbox + broker config: four plain-JSON files, and that's the whole
-configuration.
+On a terminal this walks you through the choices question-by-question (how much of your
+machine the agent sees, how approval links reach your other devices, chat channels,
+permission relay), with recommended defaults — no docs required first:
 
 ```bash
-~/.escape-clause/app/escape-clause.sh init ~/escape-clause-workspace
+escape-clause init ~/escape-clause-workspace
 ```
+
+Your answers land in `~/.escape-clause/configs/<name>.json` — plain JSON, one file per
+workspace, in the protected store the agent can't touch. That file is the single source
+of truth: edit it (or `init --reconfigure` to re-run the wizard), then re-run `init` to
+re-stamp the workspace's four config files from it. Scripting? `init <dir> --defaults`
+or flags like `--profile strict` skip the wizard.
 
 By default the agent can't read your credentials or write anywhere that would run code
-outside the sandbox later — and `ESCAPE_CLAUSE_PROFILE=strict` hides *everything* under
-`~` except the workspace itself. Profiles, custom deny lists, and the macOS/Linux
-directories worth hiding: [docs/directory-access.md](docs/directory-access.md).
+outside the sandbox later — the `strict` profile (the wizard's recommendation) hides
+*everything* under `~` except the workspace itself. Profiles, custom deny lists, and
+the macOS/Linux directories worth hiding:
+[docs/directory-access.md](docs/directory-access.md).
 
-**3. Start a sandboxed session** in a terminal you'll keep open. Trust the workspace
-when asked; `Channels: server:broker` on startup confirms the broker is live.
+**3. Start a sandboxed session** in a terminal you'll keep open — one command, any
+shell, no environment to remember:
 
 ```bash
-cd ~/escape-clause-workspace
-claude --dangerously-load-development-channels server:broker
+escape-clause launch ~/escape-clause-workspace
 ```
 
-Or run `~/.escape-clause/app/escape-clause.sh launch ~/escape-clause-workspace` — the
-same command, but it first verifies the stamped config still matches what `init` would
-write, and refuses to start if it drifted.
+It verifies the stamped workspace config still matches your config file — refusing
+with the exact drifted setting and its fix if not — prints the underlying `claude`
+command (run it yourself any time), and launches. Trust the workspace when asked;
+`Channels: server:broker` on startup confirms the broker is live.
 
 **4. Chat.** Three ways to talk to the sandboxed agent:
 
@@ -78,30 +87,25 @@ write, and refuses to start if it drifted.
 - **Channels** — connect a chat surface like Telegram, Discord, iMessage, or the local
   fakechat web UI ([docs](https://code.claude.com/docs/en/channels)). Install the
   plugin once from inside any `claude` session (e.g.
-  `/plugin install fakechat@claude-plugins-official`), then tell the launcher which
-  channel to load and which reply tool to pre-allow, re-init, and launch:
+  `/plugin install fakechat@claude-plugins-official`), then answer the channel
+  question in the wizard — or set it directly and relaunch:
 
   ```bash
-  export ESCAPE_CLAUSE_CHANNELS=plugin:fakechat@claude-plugins-official
-  export ESCAPE_CLAUSE_CHANNEL_TOOLS=mcp__plugin_fakechat_fakechat
-  ~/.escape-clause/app/escape-clause.sh init ~/escape-clause-workspace
-  ~/.escape-clause/app/escape-clause.sh launch ~/escape-clause-workspace
+  escape-clause init ~/escape-clause-workspace \
+    --channels plugin:fakechat@claude-plugins-official \
+    --channel-tools mcp__plugin_fakechat_fakechat
+  escape-clause launch ~/escape-clause-workspace
   ```
 
 > **Talking remotely?** Approval links point at `http://127.0.0.1:8790` — fine on the
 > machine running the broker, dead on your phone. The UI deliberately binds to
-> loopback only (never `0.0.0.0`), so if you chat over **remote control or a
-> channel**, set up [Tailscale](https://tailscale.com) and proxy the UI onto your
-> tailnet with [`tailscale serve`](https://tailscale.com/kb/1312/serve) (an SSH tunnel
-> also works):
->
-> ```bash
-> tailscale serve --bg 8790     # → https://<machine>.<tailnet>.ts.net
-> ```
->
-> Then run `init` (and `launch`) with
-> `ESCAPE_CLAUSE_UI_URL=https://<machine>.<tailnet>.ts.net` so the links the agent
-> shares resolve on your device.
+> loopback only (never `0.0.0.0`); something else carries it, and that's the wizard's
+> "How will you open approval links?" question. Pick **tailscale** and the broker runs
+> [`tailscale serve`](https://tailscale.com/kb/1312/serve) for you and uses your
+> tailnet URL in links; paste **your own URL** if you run a tunnel or reverse proxy
+> yourself; or point `ui.expose` in the config at a **custom provider script** in
+> `~/.escape-clause/expose/` (prints the public URL, then exits or stays resident —
+> the broker supervises it).
 
 When the agent needs anything outside the box, it files a request and sends you a link
 into the approval UI (http://127.0.0.1:8790, password from step 1) showing the exact
@@ -190,9 +194,10 @@ assurance, run the audit (step 5 above).
 
 ### `launch` refuses to start
 
-That's the config verifier working: the stamped workspace config no longer matches what
-`init` would write — a stale init, changed `ESCAPE_CLAUSE_*` env vars, or tampering.
-Inspect the file it names, then re-run `init` (with the same env you'll launch with).
+That's the config verifier working: the stamped workspace config no longer matches its
+config file (`~/.escape-clause/configs/<name>.json`) — an edit that was never
+re-stamped, or tampering. The refusal names the exact drifted setting; inspect it, then
+re-run `escape-clause init <workspace>` to re-stamp from the config.
 
 ## Repo layout
 
@@ -205,6 +210,8 @@ Inspect the file it names, then re-run `init` (with the same env you'll launch w
 | `proxy.mjs` | Deny-all egress proxy the sandbox routes through |
 | `reviewer.mjs` | AI risk summaries — one Haiku call per ticket, advisory only |
 | `guard.mjs` | Fail-closed `PreToolUse` hook denying file tools on protected paths + the stamped directory policy |
+| `setup.mjs` | Per-workspace config files (`~/.escape-clause/configs/`), the init wizard, stamping, drift verification |
+| `expose.mjs` | Exposure providers: gets the loopback-only UI a reachable URL (tailscale built-in, or your script) |
 | `escape-clause.sh` | `install` / `init` / `launch` |
 | `templates/CLAUDE.md` | Rules-of-the-box instructions stamped into new workspaces |
 | `docs/` | Architecture, security model, design docs and proposals |

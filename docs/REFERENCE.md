@@ -24,26 +24,35 @@ browser (over Tailscale if you chat remotely); the proxies exist to refuse.
 
 | Port | What | Who serves it |
 |---|---|---|
-| 8790 | approval UI | broker (`ESCAPE_CLAUSE_UI_PORT` moves it) |
-| 8791 | deny-all HTTP proxy (all sandboxed egress dies here) | broker (`ESCAPE_CLAUSE_PROXY_PORT` moves the pair) |
+| 8790 | approval UI | broker (config `ui.port` moves it) |
+| 8791 | deny-all HTTP proxy (all sandboxed egress dies here) | broker (config `proxyPort` moves the pair) |
 | 8792 | deny-all SOCKS5 proxy (git-ssh, ftp, grpc, rsync) | broker (always HTTP proxy port + 1) |
 | 8787 | fakechat web chat — only if you connect the optional fakechat channel | fakechat plugin |
 
-## Environment variables
+## Configuration
 
-All read by `escape-clause.sh`; the stamped config is a function of them, so run `init`
-and `launch` with the same values set.
+Each workspace's configuration is one plain-JSON file in the protected store:
+`~/.escape-clause/configs/<name>.json`, with `~/.escape-clause/workspaces.json` mapping
+workspace paths to names. `init` writes it (wizard on a TTY; flags like
+`--profile strict` or `--defaults` for scripts) and stamps the workspace from it;
+`launch` verifies the stamp against it and refuses drift, naming the exact setting.
+Edit the file any time, then re-run `init` to re-stamp.
 
-| Variable | What it does |
+| Field | What it does |
 |---|---|
-| `ESCAPE_CLAUSE_DIR` | Moves the protected install (default `~/.escape-clause`). |
-| `ESCAPE_CLAUSE_UI_PORT` | Approval-UI port (default `8790`). |
-| `ESCAPE_CLAUSE_UI_URL` | Base URL written into shared ticket links (default `http://127.0.0.1:<port>`). Link text only — the server always binds loopback; expose it with e.g. `tailscale serve` and set this to that address. |
-| `ESCAPE_CLAUSE_PROXY_PORT` | Deny-all HTTP proxy port; SOCKS is always +1 (default `8791`). |
-| `ESCAPE_CLAUSE_RELAY` | Permission-relay mode: `forward`, `deny` (default), or `off`. |
-| `ESCAPE_CLAUSE_CHANNELS` | Optional `--channels` spec(s) for chat channel plugins, e.g. `plugin:fakechat@claude-plugins-official` (space-separate several). |
-| `ESCAPE_CLAUSE_CHANNEL_TOOLS` | Comma-separated permission entries for those channels' reply tools, stamped into the allow-list, e.g. `mcp__plugin_fakechat_fakechat`. |
-| `ESCAPE_CLAUSE_PROFILE` | Directory-access profile: `default`, `strict` (all of `~` hidden except the workspace), or `paranoid` (workspace + toolchain only). See [directory-access.md](directory-access.md). |
-| `ESCAPE_CLAUSE_DENY_READ` | Comma-separated extra paths made unreadable (and unwritable) on both layers — bash sandbox + file-tool guard. |
-| `ESCAPE_CLAUSE_DENY_WRITE` | Comma-separated extra paths made unwritable on both layers. |
-| `ESCAPE_CLAUSE_ALLOW_READ` | Comma-separated read-only carve-outs from the `strict`/`paranoid` read fence. Cannot re-expose crown-jewel paths (`init` refuses). |
+| `profile` | Directory-access profile: `default`, `strict` (all of `~` hidden except the workspace), or `paranoid` (workspace + toolchain only). See [directory-access.md](directory-access.md). |
+| `relay` | Permission-relay mode: `forward`, `deny` (default), or `off`. |
+| `ui.port` | Approval-UI port (default `8790`). |
+| `ui.url` | Static base URL for shared ticket links (default `http://127.0.0.1:<port>`). Link text only — the server always binds loopback; use this when you run the tunnel/reverse proxy yourself. |
+| `ui.expose` | Exposure provider: `tailscale` (broker runs `tailscale serve` and uses your tailnet URL) or `script:<name>` (your executable in `~/.escape-clause/expose/<name>`: called with the UI port, prints the public URL as its first stdout line, then exits or stays resident under broker supervision). Mutually exclusive with `ui.url`. |
+| `proxyPort` | Deny-all HTTP proxy port; SOCKS is always +1 (default `8791`). |
+| `channels.specs` | `--channels` spec(s) for chat channel plugins, e.g. `plugin:fakechat@claude-plugins-official`. |
+| `channels.tools` | Permission entries for those channels' reply tools, stamped into the allow-list, e.g. `mcp__plugin_fakechat_fakechat`. |
+| `paths.denyRead` | Extra paths made unreadable (and unwritable) on both layers — bash sandbox + file-tool guard. |
+| `paths.denyWrite` | Extra paths made unwritable on both layers. |
+| `paths.allowRead` | Read-only carve-outs from the `strict`/`paranoid` read fence. Cannot re-expose crown-jewel paths (`init` refuses). |
+
+`ESCAPE_CLAUSE_DIR` (which locates the store itself, default `~/.escape-clause`) is the
+one environment variable still read everywhere. The other `ESCAPE_CLAUSE_*` vars are
+deprecated shims: `init` saves them into a NEW config (and says so); `launch` ignores
+them (and says so) — config identity lives in the file, not your shell.

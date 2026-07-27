@@ -17,10 +17,14 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const GUARD = join(ROOT, 'guard.mjs')
 const HOME = homedir()
 
+// init now records a config in the store (ESCAPE_CLAUSE_DIR) — point it at a throwaway
+// one so test runs never touch the real ~/.escape-clause.
+const STORE = mkdtempSync(join(tmpdir(), 'guard-test-store-'))
+
 function stamp(env = {}) {
   const ws = mkdtempSync(join(tmpdir(), 'guard-test-ws-'))
   const r = spawnSync('sh', [join(ROOT, 'escape-clause.sh'), 'init', ws],
-    { encoding: 'utf8', env: { ...process.env, ...env } })
+    { encoding: 'utf8', env: { ...process.env, ESCAPE_CLAUSE_DIR: STORE, ...env } })
   if (r.status !== 0) throw new Error(`init failed: ${r.stderr || r.stdout}`)
   return ws
 }
@@ -101,7 +105,7 @@ writeFileSync(join(forbidden, 'secret.txt'), 'x')
   const under = mkdtempSync(join(HOME, '.guard-test-under-home-'))
   const wsDir = join(under, 'ws')
   const r = spawnSync('sh', [join(ROOT, 'escape-clause.sh'), 'init', wsDir],
-    { encoding: 'utf8', env: { ...process.env, ESCAPE_CLAUSE_PROFILE: 'strict', ESCAPE_CLAUSE_ALLOW_READ: shared } })
+    { encoding: 'utf8', env: { ...process.env, ESCAPE_CLAUSE_DIR: STORE, ESCAPE_CLAUSE_PROFILE: 'strict', ESCAPE_CLAUSE_ALLOW_READ: shared } })
   if (r.status !== 0) throw new Error(`init failed: ${r.stderr || r.stdout}`)
   const ws = wsDir
   t('strict: Read anywhere under ~ denied', guard(ws, 'Read', { file_path: join(HOME, 'notes.txt') }), 'deny')
@@ -136,5 +140,6 @@ writeFileSync(join(forbidden, 'secret.txt'), 'x')
 }
 
 rmSync(forbidden, { recursive: true, force: true })
+rmSync(STORE, { recursive: true, force: true })
 if (failed) { console.error(`\n${failed} guard test(s) FAILED`); process.exit(1) }
 console.log('\nall guard tests passed')

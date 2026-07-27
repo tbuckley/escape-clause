@@ -10,30 +10,33 @@ permission relay, and the deny-all egress proxy. For the layered security model 
 
 Two commands with one job each:
 
-1. **`escape-clause.sh init <workspace>` stamps the workspace config** —
-   `.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json` — from the
-   protected install, and drops a `CLAUDE.md` if the workspace has none.
-2. **`escape-clause.sh launch <workspace>` runs claude** — it prints and execs
+1. **`escape-clause init <workspace>` writes the workspace's config file and stamps
+   from it** — the config (`~/.escape-clause/configs/<name>.json`, in the protected
+   store) is the source of truth, written by a question-by-question wizard on a TTY or
+   by flags/`--defaults` headless; the stamp is `.claude/settings.json`,
+   `.claude/settings.local.json`, `.claude/escape-clause-policy.json`, `.mcp.json` —
+   plus a `CLAUDE.md` if the workspace has none.
+2. **`escape-clause launch <workspace>` runs claude** — it prints and execs
    `claude --dangerously-load-development-channels server:broker` in the workspace
-   (plus `--channels $ESCAPE_CLAUSE_CHANNELS` if you opted into a chat channel). First,
-   though, it verifies the stamped config is byte-identical to what `init` would write
-   right now; if not — a stale init, changed `ESCAPE_CLAUSE_*` env, or tampering — it
-   refuses and tells you to inspect and re-run `init`. Tampering from inside the box
-   shouldn't be possible at all (file tools are guard-blocked and sandboxed bash is
-   denyWrite-blocked on the config paths), so the verify is a backstop, not the
-   defense. A tampered config is never what actually launches, and nothing is
-   rewritten behind your back.
+   (plus `--channels <specs>` from the config if you opted into a chat channel).
+   First, though, it verifies the stamped config is byte-identical to what the config
+   file would produce right now; if not — a config edit that was never re-stamped, or
+   tampering — it refuses, naming the exact drifted setting and its fix. Tampering
+   from inside the box shouldn't be possible at all (file tools are guard-blocked and
+   sandboxed bash is denyWrite-blocked on the config paths), so the verify is a
+   backstop, not the defense. A tampered config is never what actually launches, and
+   nothing is rewritten behind your back.
 
 - **The chat surface is yours to pick** — the launcher doesn't bundle one. Chat in the
   launch terminal, hand the session to claude.ai or the Claude app with
   `/remote-control` ([remote control docs](https://code.claude.com/docs/en/remote-control)),
   or connect a channel plugin — Telegram, Discord, iMessage, fakechat
-  ([channels docs](https://code.claude.com/docs/en/channels)). For a channel, set two
-  env vars before `init`/`launch`: `ESCAPE_CLAUSE_CHANNELS` (the `--channels` spec,
-  e.g. `plugin:fakechat@claude-plugins-official`; space-separate several) and
-  `ESCAPE_CLAUSE_CHANNEL_TOOLS` (comma-separated permission entries for the channels'
-  reply tools, e.g. `mcp__plugin_fakechat_fakechat` — stamped into the allow-list so
-  replies aren't auto-denied by the `deny` relay mode). If you chat over remote control
+  ([channels docs](https://code.claude.com/docs/en/channels)). For a channel, answer
+  the wizard's channel question — or set the config's `channels.specs` (the
+  `--channels` spec, e.g. `plugin:fakechat@claude-plugins-official`) and
+  `channels.tools` (permission entries for the channels' reply tools, e.g.
+  `mcp__plugin_fakechat_fakechat` — stamped into the allow-list so replies aren't
+  auto-denied by the `deny` relay mode), then re-run `init`. If you chat over remote control
   or a channel, make the approval UI reachable from your device — see
   [Sharing a request with a remote user](#sharing-a-request-with-a-remote-user).
 - `--dangerously-load-development-channels server:broker` — promotes the broker MCP
@@ -72,14 +75,17 @@ A localhost link only resolves on the machine running the broker, and the UI ser
 deliberately binds to `127.0.0.1` only — never `0.0.0.0` — so no `ESCAPE_CLAUSE_*`
 setting exposes it to the network. Remote chat therefore needs two things:
 
-1. **Forward traffic to the loopback port.** [Tailscale](https://tailscale.com) is the
-   recommended way: `tailscale serve --bg 8790` proxies
+1. **Forward traffic to the loopback port.** Pick `tailscale` in the wizard (or set
+   `ui.expose: "tailscale"` in the config) and the broker runs
+   [`tailscale serve --bg 8790`](https://tailscale.com/kb/1312/serve) itself, proxying
    `https://<machine>.<tailnet>.ts.net` (tailnet-only, TLS included) to
-   `127.0.0.1:8790`. An SSH tunnel or any reverse proxy you trust also works.
-2. **Set `ESCAPE_CLAUSE_UI_URL`** to that reachable address (e.g.
-   `https://<machine>.<tailnet>.ts.net`) when you run `init`, so shared links carry it;
-   it defaults to `http://127.0.0.1:<port>`. This changes only the URL written into
-   links and pages — not what the server listens on.
+   `127.0.0.1:8790`. An SSH tunnel or any reverse proxy you trust also works — as
+   does your own provider script (`ui.expose: "script:<name>"`, see `expose.mjs`).
+2. **Get that address into the links.** An exposure provider reports its URL and links
+   switch over automatically; if you run the tunnel yourself, set the config's
+   `ui.url` to the reachable address instead. Either way this changes only the URL
+   written into links and pages — not what the server listens on, which is loopback
+   always.
 
 The shared URL is deliberately credential-free — the sandboxed agent never receives the
 password or a session, only a pointer to the request.

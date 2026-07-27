@@ -71,12 +71,13 @@ legitimately useful); the stricter profiles hide them along with the rest of `~`
 
 ## Profiles
 
-Pick with `ESCAPE_CLAUSE_PROFILE` at `init` (and keep it set for `launch` — the config
-is a function of the env, and launch verifies it):
+The wizard's first question, or set `profile` in the workspace's config file
+(`~/.escape-clause/configs/<name>.json`) and re-run `init` to re-stamp — `launch`
+verifies the stamp against the config, nothing to keep exported:
 
 ```bash
-ESCAPE_CLAUSE_PROFILE=strict ~/.escape-clause/app/escape-clause.sh init ~/my-workspace
-ESCAPE_CLAUSE_PROFILE=strict ~/.escape-clause/app/escape-clause.sh launch ~/my-workspace
+escape-clause init ~/my-workspace --profile strict
+escape-clause launch ~/my-workspace
 ```
 
 | | `default` | `strict` | `paranoid` |
@@ -99,7 +100,7 @@ denied regions), file-tool-side by the guard's workspace exception. Use for: run
 analyzing untrusted code, long unattended sessions, anything where prompt injection is
 a live concern. Caveat: toolchains that keep state in `~` (`~/.npm`, `~/.cargo`,
 `~/.cache`) lose read access to it — point their cache/config env vars into the
-workspace, or carve specific dirs back in with `ESCAPE_CLAUSE_ALLOW_READ`.
+workspace, or carve specific dirs back in with `paths.allowRead`.
 
 **`paranoid`** — strict, plus the file tools' world shrinks to: the workspace, temp
 dirs, and read-only system toolchain paths (`/usr`, `/opt`, `/bin`, `/lib*`,
@@ -113,34 +114,37 @@ read fence on `/etc` applies to the file tools.
 
 ## Denying (or re-allowing) specific directories
 
-Three comma-separated lists, applied on both layers, any profile:
+Three lists in the config file's `paths` section, applied on both layers, any profile:
 
-```bash
-# hide tax records and a second codebase from all reads; block writes to ~/.npmrc
-export ESCAPE_CLAUSE_DENY_READ="~/Documents/taxes,~/other-project"
-export ESCAPE_CLAUSE_DENY_WRITE="~/.npmrc"
-# strict/paranoid only need this to punch read holes: share one extra dir with the agent
-export ESCAPE_CLAUSE_ALLOW_READ="~/shared-notes"
-
-~/.escape-clause/app/escape-clause.sh init ~/my-workspace
-~/.escape-clause/app/escape-clause.sh launch ~/my-workspace   # same env, or launch refuses
+```jsonc
+// ~/.escape-clause/configs/my-workspace.json
+"paths": {
+  // hide tax records and a second codebase from all reads; block writes to ~/.npmrc
+  "denyRead": ["~/Documents/taxes", "~/other-project"],
+  "denyWrite": ["~/.npmrc"],
+  // strict/paranoid only need this to punch read holes: share one extra dir
+  "allowRead": ["~/shared-notes"]
+}
 ```
+
+then `escape-clause init ~/my-workspace` to re-stamp (or pass `--deny-read`,
+`--deny-write`, `--allow-read` as comma-separated flags to `init`).
 
 Rules:
 
 - Entries are **absolute or `~/`-prefixed** paths (no globs, no relative paths); quotes
   and backslashes are refused rather than escaped. Spaces are fine
-  (`~/My Files` works); commas in paths are not.
-- `DENY_READ` blocks reads *and* writes (a write into a secret dir is still a leak
-  channel); `DENY_WRITE` blocks only writes.
-- `ALLOW_READ` carves read-only exceptions out of the profile's read fence. It can
+  (`~/My Files` works); commas in paths are not (they're the flag separator).
+- `denyRead` blocks reads *and* writes (a write into a secret dir is still a leak
+  channel); `denyWrite` blocks only writes.
+- `allowRead` carves read-only exceptions out of the profile's read fence. It can
   never re-expose the crown-jewel floor — `init` refuses entries inside (or
   containing) a protected path, and the guard checks its floor first regardless.
-- The stamped config is a pure function of these variables: change them → re-run
+- The stamped config is a pure function of the config file: change it → re-run
   `init` → `launch` verifies. An agent can't edit the lists from inside the box (the
   files live under `.claude/`, which is deny-written on both layers).
 
-Where they land — `ESCAPE_CLAUSE_DENY_READ="~/Documents/taxes"` stamps:
+Where they land — `"denyRead": ["~/Documents/taxes"]` stamps:
 
 ```jsonc
 // .claude/settings.json — binds sandboxed BASH
@@ -153,7 +157,7 @@ Where they land — `ESCAPE_CLAUSE_DENY_READ="~/Documents/taxes"` stamps:
 ## Sensitive directories worth considering
 
 The floor covers credentials and persistence. What else you should deny depends on
-what's on the machine — candidates for `ESCAPE_CLAUSE_DENY_READ` on a `default`
+what's on the machine — candidates for `paths.denyRead` on a `default`
 profile (the stricter profiles hide all of these already, since they're under `~`):
 
 | You care about | macOS | Linux |
@@ -166,7 +170,7 @@ profile (the stricter profiles hide all of these already, since they're under `~
 | More credentials | `~/.netrc`, `~/.npmrc`, `~/.docker`, `~/.kube`, `~/.config/gh`, `~/.gem`, `~/.pypirc` | same |
 | Other work | other checkouts, `~/src`, backup mounts | same |
 
-And `ESCAPE_CLAUSE_DENY_WRITE` candidates beyond the floor, if you use them:
+And `paths.denyWrite` candidates beyond the floor, if you use them:
 `~/.tmux.conf` (runs `run-shell` on attach), `~/.vim`/`~/.config/nvim` (autoloaded
 vimscript/lua), `~/.emacs.d`, `~/.ipython` (startup files), `~/.npmrc` (registry
 redirect on next install).
