@@ -197,7 +197,8 @@ const TOOLS = [
         name: { type: 'string', description: 'kebab-case name, e.g. git-fetch-origin' },
         script: { type: 'string', description: 'full script content including shebang, e.g. "#!/bin/sh\\n..."' },
         class: { type: 'string', enum: CLASSES, description: 'readonly|private-write auto-run once installed; public-write|destructive are reviewed per run' },
-        description: { type: 'string', description: 'what it does + expected args, shown in list_policies and to the reviewer' },
+        description: { type: 'string', description: 'what it does + expected args, shown in list_policies and to the reviewer. ' +
+          'No version history, hashes, or test claims — the reviewer sees the script and diff directly, so those add unverifiable noise.' },
       },
       required: ['name', 'script', 'class', 'description'],
     },
